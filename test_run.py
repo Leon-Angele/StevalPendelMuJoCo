@@ -8,18 +8,18 @@ obs, _ = env.reset()
 
 print("Starte Test-Lauf...")
 
-for i in range(1500):
+for i in range(500):
     # Simuliere eine Policy: Schwinge hin und her
-    # Wir ändern die Richtung alle 500 Schritte
+    # Wir ändern die Richtung alle 100 Schritte
     target_speed = 1.0 if (i % 100) < 50 else -1.0
     
     # Action ist im Bereich [-1, 1]
     action = np.array([target_speed], dtype=np.float32)
     
-    obs, reward, done, trunc, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
     
     # Print komplette Trajektorie
-    print(f"Step {i}: Obs={obs} | Reward={reward:.2f} | Done={done} | Trunc={trunc} | Info={info}")
+    print(f"Step {i}: Obs={obs} | Reward={reward:.2f} | Terminated={terminated} | Trunc={truncated} | Info={info}")
 
     time.sleep(0.02) # Damit wir Zeit zum Zuschauen haben
 
