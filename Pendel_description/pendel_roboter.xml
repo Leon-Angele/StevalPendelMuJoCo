@@ -32,8 +32,8 @@
     </body>
   </worldbody>
 
-  <actuator>
-    <velocity name="motor_rotary" joint="rotaryGelenk" kv="50" ctrlrange="-10 10" forcerange="-0.5 0.5"/>
-  </actuator>
+<actuator>
+    <position name="motor_rotary" joint="rotaryGelenk" kp="100" ctrlrange="-6.28318 6.28318" forcerange="-0.525 0.525"/>
+</actuator>
 
 </mujoco>

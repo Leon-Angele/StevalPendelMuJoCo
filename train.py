@@ -11,7 +11,7 @@ import time
 from stable_baselines3.common.monitor import Monitor 
 
 
-from pendel_env import PendelEnv
+from pendel_env_full import PendelEnv
 from stable_baselines3 import TD3
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.noise import NormalActionNoise
@@ -20,7 +20,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from torch.utils.tensorboard import SummaryWriter
 
 # --- Hyperparameter ---
-TOTAL_TIMESTEPS = 10_000_000
+TOTAL_TIMESTEPS = 1_000_000
 LEARNING_RATE = 3e-4
 BUFFER_SIZE = 500_000
 BATCH_SIZE = 128
@@ -36,14 +36,14 @@ TARGET_NOISE_CLIP = 0.5
 # Noise Definition
 ACTION_NOISE = NormalActionNoise(
     mean=np.zeros(1),
-    sigma=0.1 * np.ones(1)
+    sigma=0.2 * np.ones(1)
 )
 
 # Netzwerk Architektur
 POLICY_KWARGS = dict(
     net_arch=dict(
-        pi=[512, 512],      # Actor-Netzwerk
-        qf=[512, 512]       # Critic-Netzwerk
+        pi=[256, 256, 256],      # Actor-Netzwerk
+        qf=[256, 256, 256]       # Critic-Netzwerk
     ),
     activation_fn=nn.ReLU,
 )

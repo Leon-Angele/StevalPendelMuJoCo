@@ -1,4 +1,4 @@
-from pendel_env import PendelEnv
+from pendel_env_full import PendelEnv
 import time
 import numpy as np
 
@@ -19,7 +19,7 @@ for i in range(500):
     obs, reward, terminated, truncated, info = env.step(action)
     
     # Print komplette Trajektorie
-    print(f"Step {i}: Obs={obs} | Reward={reward:.2f} | Terminated={terminated} | Trunc={truncated} | Info={info}")
+    print(f"Step {i}: Obs={obs} | Reward={reward:.2f} | Trunc={truncated} | Info={info}")
 
     time.sleep(0.02) # Damit wir Zeit zum Zuschauen haben
 

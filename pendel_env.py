@@ -11,7 +11,7 @@ class PendelEnv(gym.Env):
     def __init__(self, render_mode=None, max_steps=500):
         super().__init__()
 
-        self.MAX_SPEED = 10.0  
+        self.MAX_SPEED = 3.0  
         self.dt = 0.01       
         self.max_steps = max_steps
         self.current_step = 0
@@ -44,7 +44,7 @@ class PendelEnv(gym.Env):
         
         # Zufällige Startposition (leicht ausgelenkt) hilft beim Lernen
         pendel_qpos_adr = self.model.jnt_qposadr[self.pendel_joint_id]
-        self.data.qpos[pendel_qpos_adr] = np.random.uniform(-0.1, 0.1)
+        self.data.qpos[pendel_qpos_adr] = np.random.uniform(-0.6, 0.6)
         
         mujoco.mj_step(self.model, self.data)
         return self._get_obs(), {}
