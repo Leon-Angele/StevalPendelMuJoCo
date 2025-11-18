@@ -1,152 +1,122 @@
-"""Train script for StevalPendelEnv using Stable-Baselines3 TD3.
-
-This script provides configurable hyperparameters at the top, wraps the
-environment with a Monitor for logging, writes tensorboard logs, uses
-verbose=2 and shows a tqdm progress bar during training.
-
-Usage examples:
-  python train.py
-  python train.py --total-timesteps 500000
-
-Make sure you have a Python environment with: stable-baselines3, gymnasium,
-tqdm, tensorboard, and mujoco installed.
+"""
+TD3 Training für PendelEnv
+Alle Hyperparameter und policy_kwargs sind einfach editierbar.
 """
 
-from pathlib import Path
+import numpy as np
+import gymnasium as gym
+import torch.nn as nn
 import argparse
-import os
-import sys
+from pendel_env import PendelEnv
+from stable_baselines3 import TD3
+from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.noise import NormalActionNoise
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.callbacks import BaseCallback
+from torch.utils.tensorboard import SummaryWriter
 import time
 
-import gymnasium as gym
-from stable_baselines3 import TD3
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.logger import configure
-from stable_baselines3.common.vec_env import DummyVecEnv
-from tqdm import tqdm
+# Environment erstellen
+env = PendelEnv(render_mode=None)
 
-# Make sure local package can be imported for the custom env
-ROOT = Path(__file__).parent
-sys.path.append(str(ROOT))
+# Optional: Environment-Check (hilft bei Fehlern)
+check_env(env)
 
-from stevalPendelEnv import StevalPendelEnv
-
-
-# =========================
-# Hyperparameters (edit here)
-# =========================
-ENV_ID = "StevalPendel-v0"
-TOTAL_TIMESTEPS = 50_000
-LEARNING_RATE = 1e-3
-BUFFER_SIZE = 100_000
+# TD3 Hyperparameter
+TOTAL_TIMESTEPS = 200_000
+LEARNING_RATE = 3e-4
+BUFFER_SIZE = 500_000
 BATCH_SIZE = 256
-POLICY_NOISE = 0.2
-NOISE_CLIP = 0.5
-POLICY_FREQ = 2
+TRAIN_FREQ = 1
+#TRAIN_FREQ = (1, "episode")
+GRADIENT_STEPS = 1
 GAMMA = 0.99
 TAU = 0.005
-VERBOSE = 2
-TENSORBOARD_LOG_DIR = str(ROOT / "logs" / "tb")
-MODEL_SAVE_PATH = str(ROOT / "models" / "td3_steval_pendel")
-MONITOR_DIR = str(ROOT / "logs" / "monitor")
+POLICY_DELAY = 2
+TARGET_POLICY_NOISE = 0.2
+TARGET_NOISE_CLIP = 0.5
+ACTION_NOISE = NormalActionNoise(
+    mean=np.zeros(1),   
+    sigma=0.1 * np.ones(1)  
+)
 
+POLICY_KWARGS = dict(
+	net_arch=dict(
+		pi=[128, 128],      # Actor-Netzwerk
+		qf=[512, 512]       # Critic-Netzwerk
+	),
+	activation_fn=nn.ReLU,
+)
 
-class TQDMProgressBarCallback(BaseCallback):
-	"""Progress bar callback that updates a tqdm bar using timesteps.
+class RewardTensorboardCallback(BaseCallback):
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.writer = None
+        self.episode_rewards = []
 
-	It expects `total_timesteps` to be provided via the callback's `__init__`.
-	"""
-	def __init__(self, total_timesteps: int, verbose=0):
-		super().__init__(verbose)
-		self.total_timesteps = int(total_timesteps)
-		self.pbar = None
+    def _on_training_start(self) -> None:
+        self.writer = SummaryWriter(log_dir=self.model.tensorboard_log)
 
-	def _on_training_start(self) -> None:
-		# Create progress bar at start
-		self.pbar = tqdm(total=self.total_timesteps, desc="Training", unit="steps")
+    def _on_step(self) -> bool:
+        # Episodenreward aus Infos extrahieren
+        if len(self.locals.get("infos", [])) > 0:
+            info = self.locals["infos"][-1]
+            reward = self.locals["rewards"][-1]
+            self.episode_rewards.append(reward)
+            if info.get("episode"):
+                mean_reward = np.mean(self.episode_rewards[-info["episode"]["l"]:])
+                self.writer.add_scalar("reward/mean", mean_reward, self.num_timesteps)
+        return True
 
-	def _on_step(self) -> bool:
-		# Update bar by number of environment steps in this call
-		# `self.num_timesteps` is the total timesteps done so far
-		if self.pbar is None:
-			return True
-		self.pbar.n = min(self.num_timesteps, self.total_timesteps)
-		self.pbar.refresh()
-		return True
+    def _on_training_end(self) -> None:
+        self.writer.close()
 
-	def _on_training_end(self) -> None:
-		if self.pbar is not None:
-			self.pbar.close()
+parser = argparse.ArgumentParser()
+parser.add_argument('--eval', action='store_true', help='Nur Modell evaluieren, nicht trainieren')
+args = parser.parse_args()
 
+if args.eval:
+	# Modell laden und evaluieren
+	model = TD3.load("td3_pendel")
+	env = PendelEnv(render_mode="human")
+	obs, _ = env.reset()
+	print("Starte Evaluation...")
+	for _ in range(1500):
+		action, _ = model.predict(obs, deterministic=True)
+		obs, reward, terminated, truncated, info = env.step(action)
+		# Realzeit-Sync für 60 FPS
+		time.sleep(1/60)
+		if terminated or truncated:
+			obs, _ = env.reset()
+	env.close()
+else:
+	# Parallele Envs für Training
+	train_env = PendelEnv(render_mode="none")
 
-def make_env(render_mode=None):
-	def _init():
-		env = StevalPendelEnv(render_mode=render_mode)
-		return env
-	return _init
-
-
-def main():
-	parser = argparse.ArgumentParser()
-	parser.add_argument("--total-timesteps", type=int, default=TOTAL_TIMESTEPS)
-	parser.add_argument("--tensorboard-log", type=str, default=TENSORBOARD_LOG_DIR)
-	parser.add_argument("--save-path", type=str, default=MODEL_SAVE_PATH)
-	parser.add_argument("--render", action="store_true", help="Run env in human render mode during training (slows down)")
-	args = parser.parse_args()
-
-	total_timesteps = args.total_timesteps
-
-	# Create folders
-	Path(args.tensorboard_log).mkdir(parents=True, exist_ok=True)
-	Path(MONITOR_DIR).mkdir(parents=True, exist_ok=True)
-	Path(args.save_path).parent.mkdir(parents=True, exist_ok=True)
-
-	# Vectorized env with Monitor
-	render_mode = "human" if args.render else None
-	env = DummyVecEnv([make_env(render_mode=render_mode)])
-	# Wrap with Monitor for logging episode rewards & lengths
-	env.envs[0] = Monitor(env.envs[0], filename=os.path.join(MONITOR_DIR, "monitor.csv"))
-
-	# Logger for stable-baselines3
-	new_logger = configure(folder=args.tensorboard_log, format_strings=["stdout", "tensorboard"])
-
-	# Model
-	policy_kwargs = dict()
+	# TD3-Agent initialisieren
 	model = TD3(
 		"MlpPolicy",
-		env,
+		train_env,
+		verbose=2,
 		learning_rate=LEARNING_RATE,
 		buffer_size=BUFFER_SIZE,
 		batch_size=BATCH_SIZE,
+		train_freq=TRAIN_FREQ,
+		gradient_steps=GRADIENT_STEPS,
 		gamma=GAMMA,
 		tau=TAU,
-		policy_noise=POLICY_NOISE,
-		noise_clip=NOISE_CLIP,
-		policy_freq=POLICY_FREQ,
-		verbose=VERBOSE,
-		tensorboard_log=args.tensorboard_log,
-		policy_kwargs=policy_kwargs,
+		policy_delay=POLICY_DELAY,
+		target_policy_noise=TARGET_POLICY_NOISE,
+		target_noise_clip=TARGET_NOISE_CLIP,
+		action_noise=ACTION_NOISE,
+		policy_kwargs=POLICY_KWARGS,
+		tensorboard_log="./runs/"
 	)
-	model.set_logger(new_logger)
 
-	# Callbacks
-	tqdm_cb = TQDMProgressBarCallback(total_timesteps)
-
-	# Train
-	print(f"Starting training for {total_timesteps} timesteps")
-	start = time.time()
-	model.learn(total_timesteps=total_timesteps, callback=tqdm_cb)
-	duration = time.time() - start
-
-	# Save
-	model.save(args.save_path)
-	print(f"Model saved to {args.save_path}")
-	print(f"Training took {duration:.1f} seconds")
-
+	# Training starten
+	callback = RewardTensorboardCallback()
+	#model.learn(total_timesteps=TOTAL_TIMESTEPS, tb_log_name="td3_run", progress_bar=True, callback=callback)
+	model.learn(total_timesteps=TOTAL_TIMESTEPS, tb_log_name="td3_run", progress_bar=True) 
+	# Modell speichern
+	model.save("td3_pendel")
 	env.close()
-
-
-if __name__ == "__main__":
-	main()
-

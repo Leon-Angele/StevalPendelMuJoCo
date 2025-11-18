@@ -10,12 +10,12 @@ class PendelEnv(gym.Env):
     """
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, max_steps=1500):
         super().__init__()
 
         # --- KONFIGURATION SCHRITTMOTOR ---
         self.MAX_SPEED = 5.0  # rad/s (Maximalgeschwindigkeit)
-        self.MAX_ACC = 10.0   # rad/s² (Maximale Beschleunigung)
+        self.MAX_ACC = 50   # rad/s² (Maximale Beschleunigung)
         self.dt = 0.01        # Simulationsschritt pro Action (10ms)
         
         # Interner Speicher für die aktuelle Motorgeschwindigkeit (für die Rampe)
@@ -45,6 +45,10 @@ class PendelEnv(gym.Env):
         # Renderer Setup
         self.render_mode = render_mode
         self.viewer = None
+
+        # Maximalanzahl an Schritten
+        self.max_steps = max_steps
+        self.current_step = 0
 
     def calc_reward(self,obs_next, action):
 
@@ -95,43 +99,37 @@ class PendelEnv(gym.Env):
         ], dtype=np.float32)
 
     def step(self, action):
-        # 1. Action skalieren (von [-1, 1] auf [-MAX_SPEED, MAX_SPEED])
-        target_speed = float(action[0]) * self.MAX_SPEED
+        # 1. Observation vor Action berechnen
+        obs_before = self._get_obs()
 
-        # 2. SCHRITTMOTOR RAMPE (Beschleunigungslimit)
-        # Wir dürfen die Geschwindigkeit nicht schneller ändern als MAX_ACC erlaubt
+        # 2. 1ms Physikschritt ohne Action
+        #n_physics_steps = int(0.001 / self.model.opt.timestep)
+        #for _ in range(n_physics_steps):
+        #    mujoco.mj_step(self.model, self.data)
+
+        # 3. Action wie gewohnt anwenden
+        target_speed = float(action[0]) * self.MAX_SPEED
         speed_diff = target_speed - self.current_motor_speed
         max_change = self.MAX_ACC * self.dt
-        
-        # Begrenzen der Änderung (Clipping)
         actual_change = np.clip(speed_diff, -max_change, max_change)
         self.current_motor_speed += actual_change
-        
-        # 3. Befehl an MuJoCo senden
-        self.data.ctrl[self.actuator_id] = self.current_motor_speed
+        self.data.ctrl[self.actuator_id] = target_speed
 
-        # 4. Simulation vorantreiben
-        # Wir machen mehrere kleine Physik-Schritte pro RL-Schritt für Stabilität
-        # mj_step nimmt model.opt.timestep (standard oft 0.002s)
+        # 4. Simulation vorantreiben (wie gehabt)
         n_steps = int(self.dt / self.model.opt.timestep)
         for _ in range(n_steps):
             mujoco.mj_step(self.model, self.data)
 
         # 5. Observation holen
         obs = self._get_obs()
-        
-        # 6. Reward berechnen
-        # Ziel: Pendel oben (theta = PI oder -PI) -> cos(PI) = -1 -> -(-1) = +1 Reward
-        # Start: Pendel unten (theta = 0) -> cos(0) = 1 -> -(1) = -1 Reward
         reward = self.calc_reward(obs, action)
 
-        # Optional: Kleiner Bestrafungsterm für hohe Energie/Geschwindigkeit (spart Strom)
-        # reward -= 0.01 * (self.current_motor_speed ** 2)
-
-        # 7. Terminierung (optional, hier endlos)
         terminated = False
         truncated = False
-        
+        self.current_step += 1
+        if self.current_step >= self.max_steps:
+            truncated = True
+
         info = {"motor_speed": self.current_motor_speed}
 
         if self.render_mode == "human":
@@ -147,6 +145,9 @@ class PendelEnv(gym.Env):
         
         # Motor Rampe zurücksetzen
         self.current_motor_speed = 0.0
+
+        # Schrittzähler zurücksetzen
+        self.current_step = 0
 
         # Zufällige Startposition? (Optional, hilft beim Lernen)
         # self.data.qpos[self.model.jnt_qposadr[self.pendel_joint_id]] = np.random.uniform(-0.1, 0.1)
