@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<robot name="Pendel" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="materials.xacro" />
+  <xacro:include filename="Pendel.trans" />
+  <xacro:include filename="Pendel.gazebo" />
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="3.592221998570457e-17 0.0 0.15501107810631898" rpy="0 0 0"/>
+      <mass value="11.924986949735343"/>
+      <inertia ixx="0.100382" iyy="0.100382" izz="0.009738" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="Pendel_1">
+    <inertial>
+      <origin xyz="7.53053905616492e-07 -0.057182054209378205 -0.12050399497646608" rpy="0 0 0"/>
+      <mass value="0.01740539597679812"/>
+      <inertia ixx="0.000136" iyy="0.000131" izz="6e-06" ixy="0.0" iyz="-1.6e-05" ixz="0.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.0 0.0295 -0.335002" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/Pendel_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.0 0.0295 -0.335002" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/Pendel_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="Encoder_1">
+    <inertial>
+      <origin xyz="4.2822283207196315e-08 -0.00013534763535349713 0.01901143495877572" rpy="0 0 0"/>
+      <mass value="0.1023589961334875"/>
+      <inertia ixx="1.8e-05" iyy="2e-05" izz="1.8e-05" ixy="-0.0" iyz="-0.0" ixz="0.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.0 -0.0 -0.316" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/Encoder_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.0 -0.0 -0.316" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/Encoder_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="pendelGelenk" type="continuous">
+    <origin xyz="0.0 -0.0295 0.019002" rpy="0 0 0"/>
+    <parent link="Encoder_1"/>
+    <child link="Pendel_1"/>
+    <axis xyz="0.0 -1.0 0.0"/>
+  </joint>
+
+  <joint name="rotaryGelenk" type="revolute">
+    <origin xyz="0.0 0.0 0.316" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="Encoder_1"/>
+    <axis xyz="0.0 0.0 1.0"/>
+    <limit upper="0.0" lower="-6.283185" effort="100" velocity="100"/>
+  </joint>
+
+</robot>
