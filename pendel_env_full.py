@@ -5,14 +5,14 @@ import mujoco
 import mujoco.viewer
 import os
 
-class PendelEnvFull(gym.Env):
+class PendelEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
 
     def __init__(self, render_mode=None, max_steps=500):
         super().__init__()
         
-        self.MAX_SPEED = 5.0  
-        self.dt = 0.01        
+        self.MAX_SPEED = 7.5
+        self.dt = 0.02        
         self.max_steps = max_steps
         self.current_step = 0
 
@@ -51,11 +51,9 @@ class PendelEnvFull(gym.Env):
         self.current_step = 0
         
         # Pendel leicht zufällig starten
-        self.data.qpos[self.pendel_qpos_adr] = np.random.uniform(-0.1, 0.1)
-        
-        # Optional: Auch Rotary-Arm zufällig drehen?
-        # self.data.qpos[self.rotary_qpos_adr] = np.random.uniform(-3.14, 3.14)
-        
+        self.data.qpos[self.pendel_qpos_adr] = 0
+        self.data.qpos[self.rotary_qpos_adr] = 0
+
         mujoco.mj_step(self.model, self.data)
         return self._get_obs(), {}
 
@@ -106,20 +104,42 @@ class PendelEnvFull(gym.Env):
         # Obs entpacken
         # [sin_p, cos_p, vel_p, sin_r, cos_r, vel_r]
         cos_pendel = obs[1]
-        vel_pendel = obs[2]
-        vel_rotary = obs[5] # Rotary Speed nutzen wir für Kosten
-        
+        vel_pendel = obs[2] /50
+        vel_rotary = obs[5] / self.MAX_SPEED
+
         # --- Kosten Pendel (Ziel: Oben / cos=-1) ---
-        dist_to_top = (cos_pendel + 1.0) 
-        theta_cost = dist_to_top**2
+        theta_cost = (cos_pendel + 1.0)
+    
+        return -(theta_cost**2 + 0.1*vel_pendel**2 + 0.01*vel_rotary**2)
+
+
+    def compute_rewards(self, obs, action):
+    
+        sin_phi, cos_phi, phi_dot = obs[0], obs[1], obs[2]
+        phi_dot_norm = phi_dot / 50.0 
         
-        # --- Kosten Geschwindigkeit ---
-        # Wir bestrafen jetzt auch Rotary-Speed leicht, damit er nicht unnötig rast
-        vel_cost = 0.1 * (vel_pendel**2) + 0.01 * (vel_rotary**2)
+        # 1. Die Basis-Kosten (Dein alter Ansatz)
+        # Ziel ist 0, Maximum penalty ist -2
+        distance_penalty = -(1 + cos_phi)
         
-        action_cost = 0.001 * (action[0]**2)
+        # 2. Der "Extra-Bonus" (Glockenkurve)
+        # Wir berechnen, wie weit wir von -1 entfernt sind.
+        # Da cos_phi zwischen -1 und 1 liegt, ist (1 + cos_phi) unser "Abstand" zum Ziel.
+        # Bei Zielerreichung ist dist_to_target = 0.
+        dist_to_target = (1 + cos_phi)
         
-        return float(-(theta_cost + vel_cost + action_cost))
+        # Bonus-Einstellungen:
+        # width: Wie "breit" ist der Bereich, in dem es Bonus gibt?
+        # Ein kleinerer Wert (z.B. 0.1) bedeutet, man muss sehr präzise sein.
+        bonus_width = 0.1 
+        # amplitude: Wie viel extra Punkte gibt es im perfekten Zentrum?
+        bonus_amplitude = 2.0 
+        
+        # Gauß-Funktion: Wird 2.0 bei perfektem Ziel, fällt sanft auf 0 ab, wenn man wegdriftet.
+        extra_reward = bonus_amplitude * np.exp(- (dist_to_target**2) / (2 * bonus_width**2))
+        
+        reward = distance_penalty + extra_reward - 0.1 * phi_dot_norm**2 - 0.001 * action**2
+        return float(reward)
 
     def render(self):
         if self.viewer is None:
