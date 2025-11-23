@@ -1,9 +1,6 @@
 """
-SAC Training für dein reales Schrittmotor-Pendel
-– KEIN Early Stopping
-– KEIN best_model.zip
-– Nur ein finales Modell am Ende
-– Aber trotzdem top Performance!
+SAC Training mit gSDE für PendelEnv (Schrittmotor Sim-to-Real)
+Erweitert um: --load zum Fortsetzen des Trainings
 """
 
 import numpy as np
@@ -11,89 +8,181 @@ import gymnasium as gym
 import torch.nn as nn
 import argparse
 import time
-from stable_baselines3.common.monitor import Monitor
-from pendel_env_full import PendelEnv
+import os
+
+# --- Stable Baselines3 Imports ---
 from stable_baselines3 import SAC
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.callbacks import EvalCallback
 
-# =========================== DEINE WUNSCH-HYPERPARAMETER ===========================
-TOTAL_TIMESTEPS = 2_500_000          # Du bestimmst, wann Schluss ist
-LEARNING_RATE   = 5e-4
-BUFFER_SIZE     = 1_000_000
-BATCH_SIZE      = 1024                # SAC liebt das bei deinem Problem
-GAMMA           = 0.99
-TAU             = 0.01
-ENT_COEF        = "auto"             # Bleibt die beste Wahl
+# --- Import deiner Environment ---
+try:
+    from pendel_env import PendelEnv
+except ImportError:
+    print("Fehler: 'pendel_env.py' nicht gefunden oder Klasse heißt anders.")
+    exit()
 
-# Beste Architektur für dein Pendel (breiter = besser)
+# ==========================================
+# === HYPERPARAMETER (Sim-to-Real Tuned) ===
+# ==========================================
+
+TOTAL_TIMESTEPS = 2_000_000 
+LEARNING_RATE = 1e-3
+BUFFER_SIZE = 1_000_000
+BATCH_SIZE = 256
+GAMMA = 0.995 
+TAU = 0.005
+TRAIN_FREQ = 1
+GRADIENT_STEPS = 1
+
+# === gSDE Einstellungen ===
+USE_SDE = True
+SDE_SAMPLE_FREQ = 8 
+SDE_CONST_LOG = -2.0 # Konstantes Log Std für gSDE (optional, wenn nicht in policy_kwargs)
+
+# === Netzwerk Architektur ===
 POLICY_KWARGS = dict(
-    net_arch=[400, 300, 256],
+    net_arch=dict(pi=[256, 256], qf=[256, 256]),
     activation_fn=nn.Tanh,
+    log_std_init=-2, 
 )
 
-NUM_ENVS = 64                         # Oder 32/128 je nach CPU/RAM
+NUM_ENVS = 32
 
-# =====================================================================
+# Pfade
+LOG_DIR = "./runs/"
+MODEL_PATH = "Modelle/sac_pendel_gsde"
+STATS_PATH = "Modelle/vec_normalize_sac.pkl"
+
+# ==========================================
+# === CODE ===
+# ==========================================
+
+def make_env(render_mode=None):
+    """Erstellt eine Instanz der Umgebung"""
+    env = PendelEnv(render_mode=render_mode, max_steps=1000)
+    env = Monitor(env)
+    return env
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--eval', action='store_true', help='Nur evaluieren')
-    parser.add_argument('--human', action='store_true', help='Training mit Render')
-    parser.add_argument('--model', type=str, default="sac_pendel", help='Modellname')
+    parser.add_argument('--eval', action='store_true', help='Modell nur evaluieren (kein Training)')
+    parser.add_argument('--human', action='store_true', help='Training live ansehen (render_mode="human")')
+    # NEU: Argument zum Laden des Modells
+    parser.add_argument('--load', action='store_true', help='Lade existierendes Modell und trainiere weiter')
     args = parser.parse_args()
 
+    os.makedirs(LOG_DIR, exist_ok=True)
+
     if args.eval:
-        model = SAC.load(args.model)
-        env = PendelEnv(render_mode="human")
-        obs, _ = env.reset()
-        print("Evaluation läuft – deterministische Policy")
+        # ==================
+        # === EVALUATION ===
+        # (Unverändert)
+        # ==================
+        print(f"Lade Modell '{MODEL_PATH}' und Stats...")
+        
+        env = DummyVecEnv([lambda: make_env(render_mode="human")])
+        
+        try:
+            env = VecNormalize.load(STATS_PATH, env)
+            env.training = False 
+            env.norm_reward = False
+        except FileNotFoundError:
+            print(f"FEHLER: {STATS_PATH} nicht gefunden. Du musst erst trainieren!")
+            exit()
 
-        while True:  # Endlos laufen lassen mit ESC zum Beenden oder Ctrl+C
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
-            time.sleep(1/60)
-            if terminated or truncated:
-                obs, _ = env.reset()
-        env.close()
+        try:
+            model = SAC.load(MODEL_PATH, env=env)
+        except FileNotFoundError:
+            print(f"FEHLER: {MODEL_PATH}.zip nicht gefunden.")
+            exit()
 
+        obs = env.reset()
+        print("Starte Evaluation...")
+        try:
+            while True:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, reward, done, info = env.step(action)
+                time.sleep(0.005) 
+        except KeyboardInterrupt:
+            env.close()
     else:
-        def make_env():
-            env = PendelEnv(render_mode="human" if args.human else None)
-            env = Monitor(env)
-            return env
+        # ================
+        # === TRAINING ===
+        # ================
 
-        # Vektorisierte Umgebung
-        if NUM_ENVS == 1:
-            train_env = DummyVecEnv([make_env])
+        # 1. Basale Environment(s) erstellen
+        if args.human:
+            base_env = DummyVecEnv([lambda: make_env(render_mode="human")])
         else:
-            train_env = SubprocVecEnv([make_env for _ in range(NUM_ENVS)])
+            base_env = DummyVecEnv([lambda: make_env(render_mode=None) for _ in range(NUM_ENVS)])
+        
+        # 2. Lade-Logik (NEU)
+        if args.load and os.path.exists(MODEL_PATH + ".zip") and os.path.exists(STATS_PATH):
+            print(f"--- LADE MODELL: {MODEL_PATH} und Statistiken ---")
+            
+            # A) Statistiken laden (KRITISCH!)
+            train_env = VecNormalize.load(STATS_PATH, base_env)
+            train_env.training = True 
+            train_env.norm_reward = True
+            
+            # B) Modell laden
+            model = SAC.load(MODEL_PATH, env=train_env, tensorboard_log=os.path.join(LOG_DIR, "tensorboard"))
+            
+            print("Modell und Statistiken erfolgreich geladen. Training wird fortgesetzt.")
+            
+        else:
+            if args.load:
+                print(f"Warnung: --load gesetzt, aber {MODEL_PATH}.zip oder {STATS_PATH} nicht gefunden. Starte NEU.")
+            else:
+                print("--- NEUES TRAINING ---")
 
-        model = SAC(
-            "MlpPolicy",
-            train_env,
-            verbose=1,
-            learning_rate=LEARNING_RATE,
-            buffer_size=BUFFER_SIZE,
-            batch_size=BATCH_SIZE,
-            tau=TAU,
-            gamma=GAMMA,
-            ent_coef=ENT_COEF,
-            train_freq=1,
-            gradient_steps=1,
-            policy_kwargs=POLICY_KWARGS,
-            tensorboard_log="./runs/",
-            device="auto",
-        )
+            # A) Neuer Normalizer
+            train_env = VecNormalize(base_env, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=GAMMA)
 
-        print(f"Starte SAC-Training mit {NUM_ENVS} Envs für genau {TOTAL_TIMESTEPS:,} Steps")
-        print("– Kein Early Stopping – Kein best_model – Nur finales Modell am Ende")
+            # B) Neues Modell initialisieren
+            model = SAC(
+                "MlpPolicy",
+                train_env,
+                verbose=1,
+                learning_rate=LEARNING_RATE,
+                buffer_size=BUFFER_SIZE,
+                batch_size=BATCH_SIZE,
+                gamma=GAMMA,
+                tau=TAU,
+                train_freq=TRAIN_FREQ,
+                gradient_steps=GRADIENT_STEPS,
+                
+                # --- gSDE Konfiguration ---
+                use_sde=USE_SDE,
+                sde_sample_freq=SDE_SAMPLE_FREQ,
+                
+                policy_kwargs=POLICY_KWARGS,
+                tensorboard_log=os.path.join(LOG_DIR, "tensorboard")
+            )
 
-        model.learn(
-            total_timesteps=TOTAL_TIMESTEPS,
-            tb_log_name="sac_pendel_final",
-            progress_bar=True,
-            # KEIN callback!
-        )
+        
+        # 4. Lernen starten
+        print(f"Starte SAC Training für {TOTAL_TIMESTEPS} Steps...")
+        
+        try:
+            # reset_num_timesteps=False stellt sicher, dass die Steps in Tensorboard weiterlaufen
+            model.learn(
+                total_timesteps=TOTAL_TIMESTEPS,
+                tb_log_name="sac_pendel_gsde",
+                progress_bar=True,
+                callback=None,
+                reset_num_timesteps=not args.load 
+            )
+        except KeyboardInterrupt:
+            print("\nTraining manuell abgebrochen. Speichere aktuellen Stand...")
 
-        model.save(args.model)
-        print(f"Training fertig → Modell gespeichert als: {args.model}.zip")
+        # 5. Speichern
+        model.save(MODEL_PATH)
+        train_env.save(STATS_PATH) # WICHTIG: Normalisierung speichern!
+
+        print(f"Modell gespeichert: {MODEL_PATH}.zip")
+        print(f"Stats gespeichert:  {STATS_PATH}")
+        
         train_env.close()
