@@ -9,7 +9,7 @@ import argparse
 import time
 import os
 from stable_baselines3.common.monitor import Monitor
-from pendel_env import PendelEnv 
+from pendel_env_full import PendelEnv 
 from stable_baselines3 import TD3
 
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
@@ -56,8 +56,8 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    model_path = "td3_pendel"
-    stats_path = "vec_normalize.pkl"
+    model_path = "Modelle/td3_pendel"
+    stats_path = "Modelle/vec_normalize.pkl"
     log_path = "./logs/"
     os.makedirs(log_path, exist_ok=True)
 
@@ -163,7 +163,8 @@ if __name__ == "__main__":
             # wenn man ein Modell lädt (optional, aber schön für Graphen)
             model.learn(
                 total_timesteps=TOTAL_TIMESTEPS,
-                tb_log_name="td3_pendel_ou",
+                log_interval=10,
+                tb_log_name="td3_pendel",
                 progress_bar=True,
                 callback=None,
                 reset_num_timesteps=not args.load 
