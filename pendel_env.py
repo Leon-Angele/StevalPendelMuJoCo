@@ -52,8 +52,8 @@ class PendelEnv(gym.Env):
 
         # Obs: [sin(theta), cos(theta), vel]
         self.observation_space = spaces.Box(
-            low=np.array([-1, -1, -60], dtype=np.float32),
-            high=np.array([1, 1, 60], dtype=np.float32),
+            low=np.array([-1, -1, -np.inf], dtype=np.float32),
+            high=np.array([1, 1, np.inf], dtype=np.float32),
             shape=(3,), 
             dtype=np.float32
         )
@@ -125,16 +125,9 @@ class PendelEnv(gym.Env):
         # Checks & Rewards
         rotary_pos = self.data.qpos[self.rotary_qpos_adr]
         terminated = False
-        limit_penalty = 0.0
-
-        # Endanschläge
-        if rotary_pos <= (self.rotary_min + self.limit_threshold) or \
-           rotary_pos >= (self.rotary_max - self.limit_threshold):
-            terminated = True
-            limit_penalty = -10.0
 
         obs = self._get_obs()
-        reward = self.compute_rewards(obs, action) + limit_penalty 
+        reward = self.compute_rewards(obs, action) 
         
         self.current_step += 1
         truncated = self.current_step >= self.max_steps
@@ -150,11 +143,11 @@ class PendelEnv(gym.Env):
         theta_p = self.data.qpos[self.pendel_qpos_adr]
         vel_p = self.data.qvel[self.pendel_qvel_adr]
 
-        # Sensor Noise
+        """         # Sensor Noise
         theta_p += self.np_random.normal(0, 0.001)
         vel_p += self.np_random.normal(0, 0.05)
         vel_p = np.clip(vel_p, -50.0, 50.0)   
-
+        """
         return np.array([
             np.sin(theta_p), 
             np.cos(theta_p), 
@@ -162,28 +155,43 @@ class PendelEnv(gym.Env):
         ], dtype=np.float32)
 
     def compute_rewards(self, obs, action):
-        sin_phi, cos_phi, phi_dot = obs 
+        # --- 1. State Extraction ---
+        sin_phi, cos_alpha, alpha_dot = obs[0], obs[1], obs[2]
+
+        # Normalisierung
+        alpha_dot_scaled = alpha_dot / 50.0 
+        action_scaled = action[0]
+
+        # --- 2. Reward Komponenten ---
+
+        # A. Swing-Up Reward (Linear)
+        # Ziel: -1 (Oben). Start: 1 (Unten).
+        r_swingup = (1.0 - cos_alpha) / 2.0 
         
-        # Ziel: Pendel oben (cos=-1)
-        dist_to_top = (1 + cos_phi)
-        distance_reward = -dist_to_top 
+        # B. Balance Bonus (Gauß)
+        # Distanz zum Ziel (-1). 
+        # Wenn cos = -1 ist, soll dist = 0 sein.
+        # Wenn cos = 1 (unten) ist, ist dist = 2.
+        dist_to_top = (1.0 + cos_alpha) 
         
-        # Balance Bonus
-        bonus_width = 0.1 
-        bonus_amplitude = 5.0 
-        upright_bonus = bonus_amplitude * np.exp(- (dist_to_top**2) / (2 * bonus_width**2))
+        # Breite 0.2: Fängt ab ca. +/- 45 Grad (Waagerecht) an zu wirken
+        r_balance = np.exp(-(dist_to_top**2) / (2 * 0.2**2)) 
+        # C. Stability Penalty
+        # Nur bestrafen, wenn wir NAH AM ZIEL sind (balance_factor hoch)
+        balance_factor = r_balance 
+        r_stability = -1.0 * (alpha_dot_scaled**2) * balance_factor
         
-        # Velocity Penalty (oben strenger)
-        phi_dot_norm = phi_dot / 36.0 
-        if dist_to_top < 0.2:
-            velocity_penalty = -0.5 * phi_dot_norm**2
-        else:
-            velocity_penalty = -0.05 * phi_dot_norm**2
+        # D. Centering Penalty (Rotary Arm soll nicht weglaufen)
+        # Bestraft großen Winkel theta
+        r_center = 0
         
-        # Action Penalty
-        action_penalty = -0.002 * float(action[0])**2
+        # E. Effort Penalty
+        r_effort = -0.05 * (action_scaled**2)
         
-        return float(distance_reward + upright_bonus + velocity_penalty + action_penalty)
+        # --- 3. Gesamtsumme ---
+        reward = (1.0 * r_swingup) + (2.0 * r_balance) + r_stability + r_center + r_effort
+        
+        return float(reward)
 
     def render(self):
         if self.viewer is None:

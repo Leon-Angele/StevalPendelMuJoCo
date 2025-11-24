@@ -1,5 +1,6 @@
 """
-TD3 Training für PendelEnv - CLEAN VERSION (ohne VecNormalize)
+TD3 Training für PendelEnv - OPTIMIERTE VERSION FÜR "BLINDEN" AGENTEN
+Mit VecFrameStack (Ersetzt fehlenden Arm-Sensor durch Kurzzeitgedächtnis)
 """
 import numpy as np
 import gymnasium as gym
@@ -7,38 +8,41 @@ import torch.nn as nn
 import argparse
 import os
 from stable_baselines3.common.monitor import Monitor
+
 from pendel_env import PendelEnv 
 from stable_baselines3 import TD3
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack 
 from stable_baselines3.common.callbacks import EvalCallback
 
-# --- Hyperparameter (Optimiert für Stabilität) ---
-TOTAL_TIMESTEPS = 1_000_000  # 1-2 Mio reichen oft
+# --- Hyperparameter ---
+TOTAL_TIMESTEPS = 1_000_000  
 LEARNING_RATE = 1e-3
 BUFFER_SIZE = 1_000_000  
 BATCH_SIZE = 256  
-TRAIN_FREQ = (1, "step")
-GRADIENT_STEPS = 1          
+TRAIN_FREQ = 1
+GRADIENT_STEPS = 1           # 1 Update pro Step ist oft stabiler als -1 bei Partial Observability
 GAMMA = 0.99 
 TAU = 0.005
 POLICY_DELAY = 2
 TARGET_POLICY_NOISE = 0.2  
 TARGET_NOISE_CLIP = 0.5
 
-# Noise: 0.2 für guten Swing-Up
-ACTION_NOISE_SIGMA = 0.3
+ACTION_NOISE_SIGMA = 0.3 
 
-NUM_ENVS = 64
+NUM_ENVS = 1 
+
+N_STACK = 4 
 
 POLICY_KWARGS = dict(
-    net_arch=dict(pi=[256, 256], qf=[256, 256]),
+    net_arch=dict(pi=[128, 128], qf=[256, 256]), # Netz etwas größer für komplexere Dynamik
     activation_fn=nn.ReLU,
 )
 
 def make_env(render_mode=None):
+    # max_steps erhöht, damit er Zeit für den Swing-Up hat
     env = PendelEnv(render_mode=render_mode, max_steps=1000)
-    env = Monitor(env) # Monitor loggt Reward für Tensorboard
+    env = Monitor(env) 
     return env
 
 if __name__ == "__main__":
@@ -56,7 +60,7 @@ if __name__ == "__main__":
 
     # --- SETUP ---
     
-    # 1. Action Noise (Wichtig für TD3 Exploration)
+    # Action Noise (Wichtig für TD3 Exploration)
     action_noise = OrnsteinUhlenbeckActionNoise(
         mean=np.zeros(1),
         sigma=ACTION_NOISE_SIGMA * np.ones(1),
@@ -64,17 +68,22 @@ if __name__ == "__main__":
         dt=1e-2
     )
 
-    # --- EVALUATION ODER TRAINING ---
+    # --- EVALUATION ---
     
     if args.eval:
-        # Laden ohne VecNormalize ist super einfach:
         if not os.path.exists(model_path + ".zip"):
             print("Kein Modell gefunden!")
             exit()
             
-        print("Lade Modell (Raw)...")
-        # Einfach Env erstellen, Modell laden, fertig.
+        print("Lade Modell für Evaluation...")
+        
+        # 1. Env erstellen
         env = DummyVecEnv([lambda: make_env(render_mode="human")])
+        
+        # 2. WICHTIG: Auch bei Eval muss gestackt werden!
+        # Sonst erwartet das Modell 12 Inputs, bekommt aber nur 3 -> Crash.
+        env = VecFrameStack(env, n_stack=N_STACK)
+        
         model = TD3.load(model_path, env=env)
         
         obs = env.reset()
@@ -88,17 +97,20 @@ if __name__ == "__main__":
     else:
         # --- TRAINING ---
         
-        # Environment
+        # 1. Training Environment
         if args.human:
             env = DummyVecEnv([lambda: make_env(render_mode="human")])
         else:
             env = DummyVecEnv([lambda: make_env(render_mode=None)])
 
+        # 2. Frame Stacking anwenden
+        env = VecFrameStack(env, n_stack=N_STACK)
+
         # Modell laden oder neu erstellen
         if args.load and os.path.exists(model_path + ".zip"):
             print(f"--- Lade existierendes Modell: {model_path} ---")
             model = TD3.load(model_path, env=env, tensorboard_log=log_path)
-            model.action_noise = action_noise # Noise neu setzen
+            model.action_noise = action_noise 
         else:
             print("--- Neues Training ---")
             model = TD3(
@@ -120,8 +132,9 @@ if __name__ == "__main__":
                 verbose=1
             )
 
-        # Wir nutzen einfach eine zweite Instanz der Env
+        # 3. Eval Environment (Muss exakt gleich wie Train Env aufgebaut sein)
         eval_env = DummyVecEnv([lambda: make_env(render_mode=None)])
+        eval_env = VecFrameStack(eval_env, n_stack=N_STACK) # <--- Auch hier stacken!
         
         eval_callback = EvalCallback(
             eval_env,
@@ -138,7 +151,7 @@ if __name__ == "__main__":
             model.learn(
                 total_timesteps=TOTAL_TIMESTEPS,
                 log_interval=1,
-                tb_log_name="td3",
+                tb_log_name="td3_framestack",
                 callback=eval_callback,
                 progress_bar=True,
                 reset_num_timesteps=not args.load

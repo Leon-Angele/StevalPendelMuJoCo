@@ -25,7 +25,7 @@
       <body name="Pendel_1" pos="0 -0.0295 0.019002">
         <inertial pos="7.53054e-07 -0.0571821 -0.120504" quat="0.998038 -0.0626134 0 0" mass="0.0174054" diaginertia="0.000136 0.000133016 3.9845e-06"/>
         
-        <joint name="pendelGelenk" pos="0 0 0" axis="0 -1 0" damping="0.0005" frictionloss="0.0001"/>
+        <joint name="pendelGelenk" pos="0 0 0" axis="0 -1 0" damping="0.000067" frictionloss="0.0"/>
         
         <geom pos="0 0.0295 -0.335002" type="mesh" rgba="0.7 0.7 0.7 1" mesh="Pendel_1"/>
       </body>
@@ -33,7 +33,7 @@
   </worldbody>
 
 <actuator>
-    <position name="motor_rotary" joint="rotaryGelenk" kp="1500" ctrlrange="-6.28318 6.28318" forcerange="-0.3 0.3"/>
+    <position name="motor_rotary" joint="rotaryGelenk" kp="1000" ctrlrange="-6.28318 6.28318" forcerange="-0.3 0.3"/>
 </actuator>
 
 </mujoco>
