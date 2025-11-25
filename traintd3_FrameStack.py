@@ -22,20 +22,21 @@ BUFFER_SIZE = 1_000_000
 BATCH_SIZE = 256  
 TRAIN_FREQ = 1
 GRADIENT_STEPS = 1           # 1 Update pro Step ist oft stabiler als -1 bei Partial Observability
-GAMMA = 0.99 
+GAMMA = 0.995 
 TAU = 0.005
 POLICY_DELAY = 2
 TARGET_POLICY_NOISE = 0.2  
 TARGET_NOISE_CLIP = 0.5
+LEARNING_STARTS = 10_000
 
-ACTION_NOISE_SIGMA = 0.3 
+ACTION_NOISE_SIGMA = 0.2 
 
 NUM_ENVS = 1 
 
-N_STACK = 4 
+N_STACK = 10 
 
 POLICY_KWARGS = dict(
-    net_arch=dict(pi=[128, 128], qf=[256, 256]), # Netz etwas größer für komplexere Dynamik
+    net_arch=dict(pi=[128, 128], qf=[256, 256, 128]), # Netz etwas größer für komplexere Dynamik
     activation_fn=nn.ReLU,
 )
 
@@ -129,6 +130,7 @@ if __name__ == "__main__":
                 target_noise_clip=TARGET_NOISE_CLIP,
                 policy_kwargs=POLICY_KWARGS,
                 tensorboard_log=log_path,
+                learning_starts=LEARNING_STARTS,
                 verbose=1
             )
 

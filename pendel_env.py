@@ -155,41 +155,63 @@ class PendelEnv(gym.Env):
         ], dtype=np.float32)
 
     def compute_rewards(self, obs, action):
-        # --- 1. State Extraction ---
-        sin_phi, cos_alpha, alpha_dot = obs[0], obs[1], obs[2]
 
-        # Normalisierung
-        alpha_dot_scaled = alpha_dot / 50.0 
+        obs_history = obs.reshape(-1, 3)
+        
+        # Extrahiere die Spalten über alle Frames hinweg
+        # col 0: sin_phi, col 1: cos_alpha, col 2: alpha_dot
+        cos_alpha_hist = obs_history[:, 1]
+        alpha_dot_hist = obs_history[:, 2]
+        
+        # Die aktuellsten Werte (für Basis-Berechnungen)
+        current_cos_alpha = cos_alpha_hist[-1]
+        current_alpha_dot = alpha_dot_hist[-1]
+        
+        # --- 2. Berechnung der Historien-Metriken ---
+        
+        # A. Durschnittliche Position (Konsistenz)
+        mean_cos_alpha = np.mean(cos_alpha_hist[-5:]) 
+        
+        # B. Trend (für besseres Aufschwingen)
+
+        trend_improvement = np.mean(cos_alpha_hist[-3:]) - np.mean(cos_alpha_hist[:3])
+        
+        # C. Laufruhe (Smoothness / Anti-Jitter)
+
+        alpha_dot_std = np.std(alpha_dot_hist)
+
+        # --- 3. Reward Komponenten ---
+        
+        # Skalierungen
+        alpha_dot_scaled = current_alpha_dot / 50.0 
         action_scaled = action[0]
 
-        # --- 2. Reward Komponenten ---
-
-        # A. Swing-Up Reward (Linear)
-        # Ziel: -1 (Oben). Start: 1 (Unten).
-        r_swingup = (1.0 - cos_alpha) / 2.0 
+        # A. Swing-Up Reward (BASIERT JETZT AUF MEAN)
+        # Nutzung des Mittelwerts macht den Gradienten stabiler.
+        r_swingup = (1.0 - mean_cos_alpha) / 2.0 
         
         # B. Balance Bonus (Gauß)
-        # Distanz zum Ziel (-1). 
-        # Wenn cos = -1 ist, soll dist = 0 sein.
-        # Wenn cos = 1 (unten) ist, ist dist = 2.
-        dist_to_top = (1.0 + cos_alpha) 
-        
-        # Breite 0.2: Fängt ab ca. +/- 45 Grad (Waagerecht) an zu wirken
+        dist_to_top = (1.0 + current_cos_alpha) 
         r_balance = np.exp(-(dist_to_top**2) / (2 * 0.2**2)) 
-        # C. Stability Penalty
-        # Nur bestrafen, wenn wir NAH AM ZIEL sind (balance_factor hoch)
-        balance_factor = r_balance 
-        r_stability = -1.0 * (alpha_dot_scaled**2) * balance_factor
         
-        # D. Centering Penalty (Rotary Arm soll nicht weglaufen)
-        # Bestraft großen Winkel theta
-        r_center = 0
+        # C. Stability Penalty (Kombiniert absolute Speed + Varianz)
+        # Wir bestrafen jetzt auch, wenn er zittert (std), nicht nur wenn er schnell ist.
+        r_stability = -1.0 * (alpha_dot_scaled**2) - 0.5 * (alpha_dot_std / 50.0)
         
+        # D. Swing-Up Boost (NEU)
+
+        r_trend = 0
+        if r_balance < 0.5 and trend_improvement < 0: 
+            # Hinweis: Ziel ist -1. Wenn wir von 1 auf 0 gehen, wird der Wert KLEINER.
+            # Ein negativer Trend (Richtung -1) ist hier also gut!
+            r_trend = abs(trend_improvement) * 5.0
+
         # E. Effort Penalty
         r_effort = -0.05 * (action_scaled**2)
         
-        # --- 3. Gesamtsumme ---
-        reward = (1.0 * r_swingup) + (2.0 * r_balance) + r_stability + r_center + r_effort
+        # --- 4. Gesamtsumme ---
+        # Gewichtung des Trends nicht zu hoch, sonst "wackelt" er, um Rewards zu farmen.
+        reward = (1.0 * r_swingup) + (2.0 * r_balance) + r_stability + r_trend + r_effort
         
         return float(reward)
 
