@@ -16,8 +16,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback
 
 # --- Hyperparameter ---
-TOTAL_TIMESTEPS = 1_000_000  
-LEARNING_RATE = 1e-3
+TOTAL_TIMESTEPS = 8_000_000  
+LEARNING_RATE = 3e-4
 BUFFER_SIZE = 1_000_000  
 BATCH_SIZE = 256  
 TRAIN_FREQ = 1
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         try:
             model.learn(
                 total_timesteps=TOTAL_TIMESTEPS,
-                log_interval=1,
+                log_interval=50,
                 tb_log_name="td3_framestack",
                 callback=eval_callback,
                 progress_bar=True,

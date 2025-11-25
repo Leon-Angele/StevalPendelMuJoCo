@@ -74,12 +74,22 @@ class PendelEnv(gym.Env):
 
         # Domain Randomization
         # Masse: +/- 5% (da Hardware bekannt)
-        mass_factor = self.np_random.uniform(0.95, 1.05)
+        mass_factor = self.np_random.uniform(0.90, 1.1)
         self.model.body_mass[self.pendel_body_id] = self.default_pendel_mass * mass_factor
         
         # Dämpfung: 0.8x bis 1.2x (da XML geschätzt)
-        damping_factor = self.np_random.uniform(0.8, 1.2)
+        damping_factor = self.np_random.uniform(0.7, 1.3)
         self.model.dof_damping[self.pendel_qvel_adr] = self.default_pendel_damping * damping_factor
+
+        # Max Speed: 80% bis 120% des Default-Werts
+        self.MAX_SPEED = self.np_random.uniform(0.8, 1.2) * 5.0
+        # Max Acc: 80% bis 120% des Default-Werts
+        self.accel_ramp = self.np_random.uniform(0.8, 1.2) * 100.0
+        # Drehmoment: 80% bis 120% des Default-Werts
+        actuator_range = self.model.actuator_ctrlrange[self.actuator_id]
+        torque_factor = self.np_random.uniform(0.8, 1.2)
+        self.model.actuator_ctrlrange[self.actuator_id][0] = actuator_range[0] * torque_factor
+        self.model.actuator_ctrlrange[self.actuator_id][1] = actuator_range[1] * torque_factor
 
         # Start State
         self.data.qpos[self.pendel_qpos_adr] = self.np_random.uniform(low=-0.2, high=0.2)
@@ -143,11 +153,10 @@ class PendelEnv(gym.Env):
         theta_p = self.data.qpos[self.pendel_qpos_adr]
         vel_p = self.data.qvel[self.pendel_qvel_adr]
 
-        """         # Sensor Noise
+       # """         # Sensor Noise
         theta_p += self.np_random.normal(0, 0.001)
         vel_p += self.np_random.normal(0, 0.05)
-        vel_p = np.clip(vel_p, -50.0, 50.0)   
-        """
+        #"""
         return np.array([
             np.sin(theta_p), 
             np.cos(theta_p), 
