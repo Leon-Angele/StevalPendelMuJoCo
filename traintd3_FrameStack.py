@@ -9,16 +9,16 @@ import argparse
 import os
 from stable_baselines3.common.monitor import Monitor
 
-from pendel_env import PendelEnv 
+from pendel_env_full import PendelEnv 
 from stable_baselines3 import TD3
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack 
 from stable_baselines3.common.callbacks import EvalCallback
 
 # --- Hyperparameter ---
-TOTAL_TIMESTEPS = 8_000_000  
-LEARNING_RATE = 3e-4
-BUFFER_SIZE = 1_000_000  
+TOTAL_TIMESTEPS = 1_000_000  
+LEARNING_RATE = 1e-3
+BUFFER_SIZE = 1_000_00 
 BATCH_SIZE = 256  
 TRAIN_FREQ = 1
 GRADIENT_STEPS = 1           # 1 Update pro Step ist oft stabiler als -1 bei Partial Observability
