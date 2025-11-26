@@ -16,16 +16,18 @@ class PendelEnv(gym.Env):
     def __init__(self, render_mode=None, max_steps=1000):
         super().__init__()
 
+        # --- Filter-Parameter ---
+        self.FILTER_ALPHA = 1
+        self.last_filtered_vel_p = 0.0
+        self.last_filtered_vel_r = 0.0
+
+
         # --- 1. Parameter ---
         self.MAX_SPEED = 5.0  # Max. Drehgeschwindigkeit des Motors in rad/s
         self.dt = 0.005       # Zeitintervall pro Steuerungsschritt
-        self.latency = 0.00  # Latenz
+        self.latency = 0.001  # Latenz
         self.max_steps = max_steps
         self.current_step = 0
-        self.current_total_step = 0
-
-
-        self.total_timesteps = 500_000
 
         # Stepper Motor Parameter
         self.accel_ramp = 100.0 
@@ -99,6 +101,9 @@ class PendelEnv(gym.Env):
         
         mujoco.mj_step(self.model, self.data)
 
+        self.last_filtered_vel_p = 0.0
+        self.last_filtered_vel_r = 0.0
+
         self.target_position = 0
         self.current_velocity = 0.0
         self.last_ctrl_target = 0.0
@@ -145,7 +150,6 @@ class PendelEnv(gym.Env):
         self.current_step += 1
         truncated = self.current_step >= self.max_steps
 
-        self.current_total_step +=1
 
         info = {"rotary_angle": rotary_pos}
 
@@ -154,27 +158,55 @@ class PendelEnv(gym.Env):
             
         return obs, reward, terminated, truncated, info
 
+    
     def _get_obs(self):
-        """Gibt den aktuellen Beobachtungsvektor zurück."""
-        theta_p = self.data.qpos[self.pendel_qpos_adr]
-        vel_p = self.data.qvel[self.pendel_qvel_adr]/20 
+        """Gibt den aktuellen Beobachtungsvektor zurück, gefiltert mit EMA."""
+        
+        # 1. Rohe, unnormalisierte Werte aus MuJoCo lesen
+        theta_p_raw = self.data.qpos[self.pendel_qpos_adr]
+        vel_p_raw = self.data.qvel[self.pendel_qvel_adr]
 
-        theta_r =self.data.qpos[self.rotary_qpos_adr]/6.3
-        vel_r = self.data.qvel[self.rotary_qpos_adr]/20   
+        theta_r_raw = self.data.qpos[self.rotary_qpos_adr]
+        vel_r_raw = self.data.qvel[self.rotary_qpos_adr]
 
-        self.noise_scale = min(1.0, self.current_total_step / self.total_timesteps)
+        # 2. Rauschen hinzufügen (Domain Randomization)
+        # ACHTUNG: Rauschen auf die UNNORMALISIERTEN Werte anwenden.
+        theta_p_noise = theta_p_raw + self.np_random.normal(0, 0.001)
+        vel_p_noise = vel_p_raw + self.np_random.normal(0, 0.05)
+        theta_r_noise = theta_r_raw + self.np_random.normal(0, 0.001)
+        vel_r_noise = vel_r_raw + self.np_random.normal(0, 0.05)
+        
+        # 3. Filterung der Geschwindigkeiten (Die Problem-Werte!)
+        
+        # Formel: y_t = alpha * x_t + (1 - alpha) * y_{t-1}
+        alpha = self.FILTER_ALPHA
+        one_minus_alpha = 1.0 - alpha
+        
+        # Pendel-Geschwindigkeit (vel_p)
+        filtered_vel_p = (alpha * vel_p_noise) + \
+                         (one_minus_alpha * self.last_filtered_vel_p)
+        
+        # Rotary-Geschwindigkeit (vel_r)
+        filtered_vel_r = (alpha * vel_r_noise) + \
+                         (one_minus_alpha * self.last_filtered_vel_r)
+        
+        # 4. Filter-Zustand speichern (Für den nächsten Aufruf)
+        self.last_filtered_vel_p = filtered_vel_p
+        self.last_filtered_vel_r = filtered_vel_r
 
-        theta_p += self.np_random.normal(0, 0.001 * self.noise_scale)
-        vel_p += self.np_random.normal(0, 0.05 * self.noise_scale)
-        theta_r += self.np_random.normal(0, 0.001 * self.noise_scale)
-        vel_r += self.np_random.normal(0, 0.05 * self.noise_scale)
-
+        # 5. Normalisieren und Rückgabe
+        # Die Winkel müssen nicht zwingend gefiltert werden, nur normalisiert
+        
+        vel_p_norm = filtered_vel_p / 20.0
+        vel_r_norm = filtered_vel_r / 20.0 
+        theta_r_norm = theta_r_noise / 6.3 # Normalisierung mit Magic Number
+        
         return np.array([
-            np.sin(theta_p),
-            np.cos(theta_p),
-            vel_p,
-            theta_r,
-            vel_r
+            np.sin(theta_p_noise),
+            np.cos(theta_p_noise),
+            vel_p_norm,
+            theta_r_norm,
+            vel_r_norm
         ], dtype=np.float32)
     
 
