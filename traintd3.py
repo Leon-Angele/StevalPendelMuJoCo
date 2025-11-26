@@ -14,7 +14,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import EvalCallback
 
 # --- Hyperparameter (Optimiert für Stabilität) ---
-TOTAL_TIMESTEPS = 1_000_00  
+TOTAL_TIMESTEPS = 500_000  
 LEARNING_RATE = 1e-3
 BUFFER_SIZE = 1_000_000  
 BATCH_SIZE = 256  
@@ -25,15 +25,16 @@ TAU = 0.005
 POLICY_DELAY = 2
 TARGET_POLICY_NOISE = 0.2  
 TARGET_NOISE_CLIP = 0.5
-LEARNING_STARTS = 0
+LEARNING_STARTS = 20_000
 
 # Noise: 0.2 für guten Swing-Up
-ACTION_NOISE_SIGMA = 0.2
+ACTION_NOISE_SIGMA = 0.1
 
-NUM_ENVS = 1
+NUM_ENVS = 32
 
 POLICY_KWARGS = dict(
-    net_arch=dict(pi=[256, 256], qf=[256, 256]),
+
+    net_arch=dict(pi=[128, 128, 32], qf=[128, 128, 32]),
     activation_fn=nn.ReLU,
 )
 

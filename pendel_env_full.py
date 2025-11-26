@@ -22,7 +22,11 @@ class PendelEnv(gym.Env):
         self.latency = 0.00  # Latenz
         self.max_steps = max_steps
         self.current_step = 0
-        
+        self.current_total_step = 0
+
+
+        self.total_timesteps = 500_000
+
         # Stepper Motor Parameter
         self.accel_ramp = 100.0 
         self.effective_step = np.deg2rad(1.8) / 16 
@@ -57,8 +61,8 @@ class PendelEnv(gym.Env):
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
         self.observation_space = spaces.Box(
-            low=np.array([-1, -1, -np.inf, -np.inf, -np.inf], dtype=np.float32),
-            high=np.array([1, 1, np.inf, np.inf, np.inf], dtype=np.float32),
+            low=np.array([-1, -1, -1, -1, -1], dtype=np.float32),
+            high=np.array([1, 1, 1, 1, 1], dtype=np.float32),
             shape=(5,),
             dtype=np.float32
         )
@@ -77,7 +81,7 @@ class PendelEnv(gym.Env):
         mujoco.mj_resetData(self.model, self.data)
         self.current_step = 0
 
-        """
+        #"""
         # Domain Randomization
         mass_factor = self.np_random.uniform(0.95, 1.05)
         self.model.body_mass[self.pendel_body_id] = self.default_pendel_mass * mass_factor
@@ -85,17 +89,17 @@ class PendelEnv(gym.Env):
         damping_factor = self.np_random.uniform(0.9, 1.1)
         self.model.dof_damping[self.pendel_qvel_adr] = self.default_pendel_damping * damping_factor
 
-        #self.MAX_SPEED = self.np_random.uniform(0.8, 1.2) * 5.0
-        #self.accel_ramp = self.np_random.uniform(0.8, 1.2) * 100.0
+        self.MAX_SPEED = self.np_random.uniform(0.9, 1.1) * 5.0
+        self.accel_ramp = self.np_random.uniform(0.9, 1.1) * 100.0
         
-        """
+        #"""
         # Start State
         self.data.qpos[self.pendel_qpos_adr] = self.np_random.uniform(low=-0.2, high=0.2)
         self.data.qpos[self.rotary_qpos_adr] = 0.0
         
         mujoco.mj_step(self.model, self.data)
 
-        self.target_position = 0.0
+        self.target_position = 0
         self.current_velocity = 0.0
         self.last_ctrl_target = 0.0
 
@@ -141,6 +145,8 @@ class PendelEnv(gym.Env):
         self.current_step += 1
         truncated = self.current_step >= self.max_steps
 
+        self.current_total_step +=1
+
         info = {"rotary_angle": rotary_pos}
 
         if self.render_mode == "human":
@@ -151,16 +157,17 @@ class PendelEnv(gym.Env):
     def _get_obs(self):
         """Gibt den aktuellen Beobachtungsvektor zurück."""
         theta_p = self.data.qpos[self.pendel_qpos_adr]
-        vel_p = self.data.qvel[self.pendel_qvel_adr] 
+        vel_p = self.data.qvel[self.pendel_qvel_adr]/20 
 
-        theta_r =self.data.qpos[self.rotary_qpos_adr] 
-        vel_r = self.data.qvel[self.rotary_qpos_adr]   
+        theta_r =self.data.qpos[self.rotary_qpos_adr]/6.3
+        vel_r = self.data.qvel[self.rotary_qpos_adr]/20   
 
-        # Noise hinzufügen
-        #theta_p += self.np_random.normal(0, 0.001)
-        #vel_p += self.np_random.normal(0, 0.05)
-        #theta_r += self.np_random.normal(0, 0.001)
-        #vel_r += self.np_random.normal(0, 0.05)
+        self.noise_scale = min(1.0, self.current_total_step / self.total_timesteps)
+
+        theta_p += self.np_random.normal(0, 0.001 * self.noise_scale)
+        vel_p += self.np_random.normal(0, 0.05 * self.noise_scale)
+        theta_r += self.np_random.normal(0, 0.001 * self.noise_scale)
+        vel_r += self.np_random.normal(0, 0.05 * self.noise_scale)
 
         return np.array([
             np.sin(theta_p),
@@ -171,51 +178,59 @@ class PendelEnv(gym.Env):
         ], dtype=np.float32)
     
 
-    def compute_rewards(self, obs, action):
-        # 1. Inputs entpacken (WICHTIG: Wir brauchen vel_p!)
-        cos_p = obs[1]      # Cosinus Pendel (1=unten, -1=oben)
-        vel_p = obs[2]      # <--- WICHTIG: Pendel Geschwindigkeit
-        theta_r = obs[3]    # Rotary Winkel
-        vel_r = obs[4]      # Rotary Geschwindigkeit
-        action_val = action[0]
+    def compute_rewards(
+        self,
+        state,
+        action,
+        # Gewichte für die Nebenziele (Armposition, Energie, etc.)
+        q_theta=1.0,       # Bestrafung für falsche Arm-Position
+        q_theta_dot=0.1,   # Bestrafung für wilde Arm-Bewegungen
+        q_phi_dot=0.5,     # Bestrafung für wilde Pendel-Bewegungen
+        r_control=0.01,    # Bestrafung für hohen Energieverbrauch (u)
         
-        # ----------------------------------------------------------------
-        # 1. SWING UP (Aufschwung)
-        # ----------------------------------------------------------------
-        # Wir wollen cos_p = -1. 
-        # Formel: (1 - cos_p) / 2.  -> Unten=0, Oben=1.
-        # Wir quadrieren es nicht zwingend, linear ist oft stabiler für den Sog nach oben.
-        r_dist = (1.0 - cos_p) * 0.5 
-
-        # ----------------------------------------------------------------
-        # 2. BALANCE (Der Bonus)
-        # ----------------------------------------------------------------
-        # Ziel: Oben (-1) UND Geschwindigkeit nahe 0.
-        # Das verhindert den Propeller: Bonus gibts nur, wenn er langsam ist!
-        error_angle = 1.0 + cos_p
+        # Parameter für die Gauß-Glocke
+        sigma_phi=1.57079633,     
         
-        # Bonus ist hoch, aber nur wenn Winkel stimmt UND Velocity klein ist
-        # Wir dämpfen den Bonus mit der Geschwindigkeit: exp(-vel^2)
-        r_bon = 5.0 * np.exp(-(error_angle**2) / 0.1) * np.exp(-(vel_p**2) / 5.0)
+        phi_target=np.pi,
+        theta_target=0.0
+    ):
 
-        # ----------------------------------------------------------------
-        # 3. PENALTIES (Bestrafungen)
-        # ----------------------------------------------------------------
-        
-        # A. Geschwindigkeit Pendel (Anti-Propeller Grundlast)
-        # Das hier bestraft schnelles Drehen generell.
-        r_vel_p = -0.05 * ((vel_p ) / 50)
+        sin_phi, cos_phi, phi_dot, theta, theta_dot = state
+        phi = np.arctan2(sin_phi, cos_phi)
+        u = action[0]
 
-        # B. Center Penalty (FIXED)
-        # Muss quadratisch sein! Bestraft Abweichung nach links UND rechts.
-        r_center =0# -0.01 * (theta_r ** 2)
-        
-        # C. Action & Rotary Speed (Energie sparen, sanft bewegen)
-        r_action = -0.01 * (action_val ** 2)
-        r_vel_r  = -0.01 * (vel_r ** 2) # Bestraft wildes Rudern des Arms
+        # --- 1. Fehler berechnen ---
+        phi_err_raw = phi - phi_target
+        theta_err_raw = theta - theta_target
 
-        # Gesamt
-        return float(r_dist + r_bon + r_vel_p + r_center + r_action + r_vel_r)
+        # Normalisieren auf [-pi, pi]
+        phi_err = ((phi_err_raw + np.pi) % (2 * np.pi)) - np.pi
+        theta_err = ((theta_err_raw + np.pi) % (2 * np.pi)) - np.pi
+
+        # --- 2. Das Hauptziel: Die Gauß-Glocke für das Pendel ---
+        # Das Ergebnis ist ein Wert zwischen 0.0 (ganz unten) und 1.0 (perfekt oben).
+        # Die Division durch (2 * sigma^2) steuert die Steilheit.
+        reward_phi =1 * (np.exp(- (phi_err**2) / (2 * sigma_phi**2)))
+
+        # --- 3. Die Kosten (Penalties) für Nebenziele ---
+        # Wir ziehen diese von der Belohnung ab, um Energieeffizienz und
+        # Stabilität zu erzwingen.
+        costs = (q_theta      * (theta_err**2) +
+                 q_theta_dot  * (theta_dot**2) +
+                 q_phi_dot    * (phi_dot**2) +
+                 r_control    * (u**2))
+
+        # --- 4. Gesamt-Reward ---
+        # Formel: "Tu das Richtige (Glocke)" minus "Mach nichts Dummes (Kosten)"
+        reward = reward_phi - costs
+        """         print(  f"Reward Components => "
+                f"Reward_phi: {reward_phi:.3f}, "
+                f"Costs: {costs:.3f}, "
+                f"Total Reward: {reward:.3f}"
+        ) """
+
+        return float(reward)
+
 
     def render(self):
         if self.viewer is None:
