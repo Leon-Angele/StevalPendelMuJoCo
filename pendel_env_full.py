@@ -6,6 +6,13 @@ import mujoco.viewer
 import os
 import time
 
+MAX_SPEED = 20.0  # Max. Drehgeschwindigkeit des Motors in rad/s
+ACCEL_RAMP = 40.0  # Beschleunigungsrampe in rad/s²
+EFFECTIVE_STEP = np.deg2rad(1.8) / 8
+
+DT = 0.005 # Steuerungsintervall in Sekunden
+LATENCY = 0.001  # Latenz in Sekunden
+
 class PendelEnv(gym.Env):
     """
     MuJoCo-Umgebung für ein Inverses Pendel (Rotary Inverted Pendulum).
@@ -13,29 +20,30 @@ class PendelEnv(gym.Env):
     """
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
 
-    def __init__(self, render_mode=None, max_steps=1000):
+    def __init__(self, render_mode=None, max_steps=3000):
         super().__init__()
 
         # --- Filter-Parameter ---
-        self.FILTER_ALPHA = 1
+        self.FILTER_ALPHA = 0.4
         self.last_filtered_vel_p = 0.0
         self.last_filtered_vel_r = 0.0
 
 
         # --- 1. Parameter ---
-        self.MAX_SPEED = 5.0  # Max. Drehgeschwindigkeit des Motors in rad/s
-        self.dt = 0.005       # Zeitintervall pro Steuerungsschritt
-        self.latency = 0.001  # Latenz
+        self.MAX_SPEED = MAX_SPEED  # Max. Drehgeschwindigkeit des Motors in rad/s
+        self.dt = DT       # Zeitintervall pro Steuerungsschritt
+        self.latency = LATENCY  # Latenz
         self.max_steps = max_steps
         self.current_step = 0
 
         # Stepper Motor Parameter
-        self.accel_ramp = 100.0 
-        self.effective_step = np.deg2rad(1.8) / 16 
+        self.accel_ramp = ACCEL_RAMP  # Beschleunigungsrampe in rad/s²
+        self.effective_step = EFFECTIVE_STEP 
         
         # --- 2. MuJoCo Setup ---
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        xml_path = os.path.join(current_dir, "Pendel_description", "pendel_roboter.xml")
+        # Passen Sie den Pfad an, falls nötig.
+        xml_path = os.path.join(current_dir, "Pendel_description", "pendel_roboter.xml") 
 
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
@@ -62,9 +70,12 @@ class PendelEnv(gym.Env):
         # --- 3. Spaces ---
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
+        # HINWEIS: Observation Space ist noch shape=(5,). 
+        # Wenn Sie self.last_action in _get_obs() hinzufügen, 
+        # muss dies auf shape=(6,) geändert werden.
         self.observation_space = spaces.Box(
-            low=np.array([-1, -1, -1, -1, -1], dtype=np.float32),
-            high=np.array([1, 1, 1, 1, 1], dtype=np.float32),
+            low=np.array([-1, -1, -np.inf, -1, -np.inf], dtype=np.float32),
+            high=np.array([1, 1, np.inf, 1, np.inf], dtype=np.float32),
             shape=(5,),
             dtype=np.float32
         )
@@ -76,6 +87,8 @@ class PendelEnv(gym.Env):
         self.target_position = 0.0      
         self.current_velocity = 0.0     
         self.last_ctrl_target = 0.0     
+        # NEU: Zustand für Action Smoothness Penalty
+        self.last_action = np.array([0.0]) 
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -83,18 +96,17 @@ class PendelEnv(gym.Env):
         mujoco.mj_resetData(self.model, self.data)
         self.current_step = 0
 
-        #"""
         # Domain Randomization
         mass_factor = self.np_random.uniform(0.95, 1.05)
         self.model.body_mass[self.pendel_body_id] = self.default_pendel_mass * mass_factor
         
-        damping_factor = self.np_random.uniform(0.9, 1.1)
+        damping_factor = self.np_random.uniform(0.8, 1.2)
         self.model.dof_damping[self.pendel_qvel_adr] = self.default_pendel_damping * damping_factor
 
-        self.MAX_SPEED = self.np_random.uniform(0.9, 1.1) * 5.0
-        self.accel_ramp = self.np_random.uniform(0.9, 1.1) * 100.0
-        
-        #"""
+        self.MAX_SPEED = self.np_random.uniform(0.9, 1.1) * MAX_SPEED
+        self.accel_ramp = self.np_random.uniform(0.9, 1.1) * ACCEL_RAMP
+        self.latency = self.np_random.uniform(0.9, 1.1) * LATENCY
+
         # Start State
         self.data.qpos[self.pendel_qpos_adr] = self.np_random.uniform(low=-0.2, high=0.2)
         self.data.qpos[self.rotary_qpos_adr] = 0.0
@@ -107,6 +119,8 @@ class PendelEnv(gym.Env):
         self.target_position = 0
         self.current_velocity = 0.0
         self.last_ctrl_target = 0.0
+        # NEU: last_action initialisieren
+        self.last_action = np.array([0.0]) 
 
         return self._get_obs(), {}
 
@@ -141,7 +155,6 @@ class PendelEnv(gym.Env):
         # --- 3. Rewards & Terminierung ---
         rotary_pos = self.data.qpos[self.rotary_qpos_adr]
         
-        # WICHTIG: Keine vorzeitige Terminierung (Endlos-Loop bis max_steps)
         terminated = False 
 
         obs = self._get_obs()
@@ -150,11 +163,13 @@ class PendelEnv(gym.Env):
         self.current_step += 1
         truncated = self.current_step >= self.max_steps
 
-
         info = {"rotary_angle": rotary_pos}
 
         if self.render_mode == "human":
             self.render()
+            
+        # NEU: Speichere die aktuelle Aktion für den nächsten Smoothness Penalty
+        self.last_action = action.copy()
             
         return obs, reward, terminated, truncated, info
 
@@ -170,36 +185,31 @@ class PendelEnv(gym.Env):
         vel_r_raw = self.data.qvel[self.rotary_qpos_adr]
 
         # 2. Rauschen hinzufügen (Domain Randomization)
-        # ACHTUNG: Rauschen auf die UNNORMALISIERTEN Werte anwenden.
         theta_p_noise = theta_p_raw + self.np_random.normal(0, 0.001)
         vel_p_noise = vel_p_raw + self.np_random.normal(0, 0.05)
         theta_r_noise = theta_r_raw + self.np_random.normal(0, 0.001)
         vel_r_noise = vel_r_raw + self.np_random.normal(0, 0.05)
         
-        # 3. Filterung der Geschwindigkeiten (Die Problem-Werte!)
-        
-        # Formel: y_t = alpha * x_t + (1 - alpha) * y_{t-1}
+        # 3. Filterung der Geschwindigkeiten
         alpha = self.FILTER_ALPHA
         one_minus_alpha = 1.0 - alpha
         
         # Pendel-Geschwindigkeit (vel_p)
         filtered_vel_p = (alpha * vel_p_noise) + \
-                         (one_minus_alpha * self.last_filtered_vel_p)
+                             (one_minus_alpha * self.last_filtered_vel_p)
         
         # Rotary-Geschwindigkeit (vel_r)
         filtered_vel_r = (alpha * vel_r_noise) + \
-                         (one_minus_alpha * self.last_filtered_vel_r)
+                             (one_minus_alpha * self.last_filtered_vel_r)
         
-        # 4. Filter-Zustand speichern (Für den nächsten Aufruf)
+        # 4. Filter-Zustand speichern 
         self.last_filtered_vel_p = filtered_vel_p
         self.last_filtered_vel_r = filtered_vel_r
 
         # 5. Normalisieren und Rückgabe
-        # Die Winkel müssen nicht zwingend gefiltert werden, nur normalisiert
-        
-        vel_p_norm = filtered_vel_p / 20.0
-        vel_r_norm = filtered_vel_r / 20.0 
-        theta_r_norm = theta_r_noise / 6.3 # Normalisierung mit Magic Number
+        vel_p_norm = filtered_vel_p 
+        vel_r_norm = filtered_vel_r 
+        theta_r_norm = theta_r_noise / 6.3 
         
         return np.array([
             np.sin(theta_p_noise),
@@ -210,24 +220,29 @@ class PendelEnv(gym.Env):
         ], dtype=np.float32)
     
 
-    def compute_rewards(
+    def compute_rewards2(
         self,
         state,
         action,
         # Gewichte für die Nebenziele (Armposition, Energie, etc.)
-        q_theta=1.0,       # Bestrafung für falsche Arm-Position
-        q_theta_dot=0.1,   # Bestrafung für wilde Arm-Bewegungen
-        q_phi_dot=0.5,     # Bestrafung für wilde Pendel-Bewegungen
-        r_control=0.01,    # Bestrafung für hohen Energieverbrauch (u)
+        q_theta=1.0,           # Bestrafung für falsche Arm-Position
+        q_theta_dot=0.1,       # Bestrafung für wilde Arm-Bewegungen
+        q_phi_dot=0.5,         # Bestrafung für wilde Pendel-Bewegungen
+        r_control=0.01,        # Bestrafung für hohen Energieverbrauch (u)
+        q_smooth=0.0,          # NEU: Bestrafung für Aktionsänderungen (Zittern)
         
         # Parameter für die Gauß-Glocke
-        sigma_phi=1.57079633,     
+        sigma_phi=np.pi/2,         # SCHÄRFERER WERT für Stabilität
         
         phi_target=np.pi,
         theta_target=0.0
     ):
 
         sin_phi, cos_phi, phi_dot, theta, theta_dot = state
+        
+        phi_dot = phi_dot / 20
+        theta_dot = theta_dot / 20
+
         phi = np.arctan2(sin_phi, cos_phi)
         u = action[0]
 
@@ -239,30 +254,99 @@ class PendelEnv(gym.Env):
         phi_err = ((phi_err_raw + np.pi) % (2 * np.pi)) - np.pi
         theta_err = ((theta_err_raw + np.pi) % (2 * np.pi)) - np.pi
 
-        # --- 2. Das Hauptziel: Die Gauß-Glocke für das Pendel ---
-        # Das Ergebnis ist ein Wert zwischen 0.0 (ganz unten) und 1.0 (perfekt oben).
-        # Die Division durch (2 * sigma^2) steuert die Steilheit.
-        reward_phi =1 * (np.exp(- (phi_err**2) / (2 * sigma_phi**2)))
+        # --- 2. Das Hauptziel: Die Gauß-Glocke ---
+        reward_phi = 1 * (np.exp(- (phi_err**2) / (2 * sigma_phi**2)))
+        
+        # --- 3. Der "Sweet Spot" Bonus  ---
+        dist_angle = np.abs(phi_err)
+        dist_vel   = np.abs(phi_dot)
 
-        # --- 3. Die Kosten (Penalties) für Nebenziele ---
-        # Wir ziehen diese von der Belohnung ab, um Energieeffizienz und
-        # Stabilität zu erzwingen.
-        costs = (q_theta      * (theta_err**2) +
-                 q_theta_dot  * (theta_dot**2) +
-                 q_phi_dot    * (phi_dot**2) +
-                 r_control    * (u**2))
+        # Ein Bonus, der explodiert, wenn beides gegen 0 geht
+        stabilization_bonus = 2.0 * np.exp(-(dist_angle**2 + dist_vel**2) * 10.0)
 
-        # --- 4. Gesamt-Reward ---
-        # Formel: "Tu das Richtige (Glocke)" minus "Mach nichts Dummes (Kosten)"
-        reward = reward_phi - costs
-        """         print(  f"Reward Components => "
-                f"Reward_phi: {reward_phi:.3f}, "
-                f"Costs: {costs:.3f}, "
-                f"Total Reward: {reward:.3f}"
-        ) """
+        # --- 4. Die Kosten (Penalties) für Nebenziele ---
+        
+        # Berechne die Differenz zur letzten Aktion (für Smoothness Penalty)
+        u_diff = u - self.last_action[0] 
+        
+        costs = (q_theta       * (theta_err**2) +
+                 q_theta_dot   * (theta_dot**2) +
+                 q_phi_dot     * (phi_dot**2) +
+                 r_control     * (u**2) +
+                 q_smooth      * (u_diff**2)) # <--- SMOOTHNESS COST
 
+        # --- 5. Gesamt-Reward ---
+        reward = reward_phi - costs + stabilization_bonus # <-- Bonus hier addiert!
+        
         return float(reward)
 
+
+    def compute_rewards(
+        self,
+        state,
+        action,
+        # Gewichte für die Nebenziele (Armposition, Energie, etc.)
+        q_theta=1.0,           # Bestrafung für falsche Arm-Position
+        q_theta_dot=0.1,       # Bestrafung für wilde Arm-Bewegungen
+        q_phi_dot=0.5,         # Bestrafung für wilde Pendel-Bewegungen
+        r_control=0.01,        # Bestrafung für hohen Energieverbrauch (u)
+        q_smooth=0.0,          # NEU: Bestrafung für Aktionsänderungen (Zittern)
+        
+        # Parameter für die Gauß-Glocke
+        sigma_phi=np.pi/2,         # SCHÄRFERER WERT für Stabilität
+        
+        phi_target=np.pi,
+        theta_target=0.0
+    ):
+        sin_phi, cos_phi, phi_dot, theta, theta_dot = state
+        
+        phi_dot = phi_dot / 20
+        theta_dot = theta_dot / 40
+
+        phi = np.arctan2(sin_phi, cos_phi)
+        u = action[0]
+
+        # --- 1. Fehler berechnen ---
+        phi_err_raw = phi - phi_target
+        theta_err_raw = theta - theta_target
+        # Normalisieren auf [-pi, pi]
+        phi_err = ((phi_err_raw + np.pi) % (2 * np.pi)) - np.pi
+        theta_err = ((theta_err_raw + np.pi) % (2 * np.pi)) - np.pi
+
+        # --- 1. & 2. Hauptziel (Grobe Orientierung) ---
+        # Die breite Glocke hilft beim Aufschwingen (Dense Reward)
+        reward_phi = 1.0 * np.exp(-(phi_err**2) / (2 * sigma_phi**2))
+        
+        # --- 3. VERBESSERT: Der Stabilisierungs-Bonus ---
+        # Statt harter If-Abfrage: Ein scharfer Peak, der Winkel UND Geschwindigkeit prüft.
+        # "Ich kriege extra Punkte, wenn ich oben bin UND still stehe."
+        # phi_dot ist schon skaliert (~ Bereich -1 bis 1), phi_err ist (-pi bis pi)
+        # Wir gewichten den Fehler quadratisch.
+        target_accuracy = 0.1  # Wie "scharf" soll der Bonus sein?
+        # Dieser Term wird 1.0, wenn Fehler=0 und Speed=0. Sonst fällt er schnell ab.
+        combined_error = (phi_err**2) + 0.5 * (phi_dot**2) 
+        bonus = 2.0 * np.exp(-combined_error / (target_accuracy**2))
+
+        # --- 4. Kosten ---
+        # Optional: Bestrafung für Geschwindigkeit erhöhen?
+        # q_phi_dot ist bei Ihnen 0.5. Das ist okay für den Schwung.
+        # Der "bonus" oben übernimmt jetzt den Anreiz zum Stillstand.
+
+        u_diff = u - self.last_action[0] 
+        
+        costs = (q_theta       * (theta_err**2) +
+                 q_theta_dot   * (theta_dot**2) +
+                 q_phi_dot     * (phi_dot**2) +
+                 r_control     * (u**2) +
+                 q_smooth      * (u_diff**2))
+
+        # --- 5. Gesamt ---
+        # WICHTIG: Prüfen Sie die Balance. 
+        # Max Reward = 1.0 (Basis) + 2.0 (Bonus) = 3.0
+        # Max Costs sollten dies nicht sofort auffressen.
+        reward = reward_phi + bonus - costs
+        
+        return float(reward)
 
     def render(self):
         if self.viewer is None:

@@ -16,12 +16,12 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback
 
 # --- Hyperparameter ---
-TOTAL_TIMESTEPS = 1_000_000  
+TOTAL_TIMESTEPS = 500_000  
 LEARNING_RATE = 1e-3
-BUFFER_SIZE = 1_000_00 
+BUFFER_SIZE = 1_000_000 
 BATCH_SIZE = 512  
 TRAIN_FREQ = 1
-GRADIENT_STEPS = 1           #
+GRADIENT_STEPS = 1          
 GAMMA = 0.99 
 TAU = 0.005
 POLICY_DELAY = 2
