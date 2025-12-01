@@ -10,19 +10,17 @@ print("Starte Test-Lauf...")
 
 obs_list = []
 reward_list = []
-for i in range(1000):
+for i in range(500):
     # Simuliere eine Policy: Schwinge hin und her
     # Wir ändern die Richtung alle 200 Schritte
-    target_speed = 0.5 if (i % 200) < 100 else -1.0
-    
+    target_speed = 1 if (i % 50) < 25 else -1.0
     # Action ist im Bereich [-1, 1]
     action = np.array([target_speed], dtype=np.float32)
-    action = np.array([0], dtype=np.float32)
-
     obs, reward, terminated, truncated, info = env.step(action)
     obs_list.append(obs)
     reward_list.append(reward)
     #print(f"Step {i}: Obs={obs} | Reward={reward:.2f} ")
+    print("Action:", action)
     time.sleep(0.005) # Damit wir Zeit zum Zuschauen haben
 
 # Nach dem regulären Lauf: ca. 5 Sekunden keine Aktion (action = 0)

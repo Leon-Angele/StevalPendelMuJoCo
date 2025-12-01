@@ -6,12 +6,13 @@ import mujoco.viewer
 import os
 import time
 
-MAX_SPEED = 20.0  # Max. Drehgeschwindigkeit des Motors in rad/s
-ACCEL_RAMP = 40.0  # Beschleunigungsrampe in rad/s²
-EFFECTIVE_STEP = np.deg2rad(1.8) / 8
+MAX_SPEED = 10.0   # Max. Drehgeschwindigkeit des Motors in rad/s
+MIN_SPEED = 2.0    # Min. Drehgeschwindigkeit des Motors in rad/s
+ACCEL_RAMP = 20.0  # Beschleunigungsrampe in rad/s²
+EFFECTIVE_STEP = np.deg2rad(1.8) / 16
 
-DT = 0.005 # Steuerungsintervall in Sekunden
-LATENCY = 0.001  # Latenz in Sekunden
+DT = 0.005      # Steuerungsintervall in Sekunden
+LATENCY = 0.001 # Latenz in Sekunden
 
 class PendelEnv(gym.Env):
     """
@@ -28,22 +29,23 @@ class PendelEnv(gym.Env):
         self.last_filtered_vel_p = 0.0
         self.last_filtered_vel_r = 0.0
 
-
         # --- 1. Parameter ---
-        self.MAX_SPEED = MAX_SPEED  # Max. Drehgeschwindigkeit des Motors in rad/s
-        self.dt = DT       # Zeitintervall pro Steuerungsschritt
-        self.latency = LATENCY  # Latenz
+        self.MAX_SPEED = MAX_SPEED
+        self.MIN_SPEED = MIN_SPEED 
+        self.DEADZONE_MAGNITUDE = 0.05 # Deadzone für die Aktion
+        self.dt = DT
+        self.latency = LATENCY
         self.max_steps = max_steps
         self.current_step = 0
 
         # Stepper Motor Parameter
-        self.accel_ramp = ACCEL_RAMP  # Beschleunigungsrampe in rad/s²
+        self.accel_ramp = ACCEL_RAMP
         self.effective_step = EFFECTIVE_STEP 
         
         # --- 2. MuJoCo Setup ---
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Passen Sie den Pfad an, falls nötig.
-        xml_path = os.path.join(current_dir, "Pendel_description", "pendel_roboter.xml") 
+        # Pfad zum XML-Modell anpassen
+        xml_path = os.path.join(current_dir, "Pendel_description", "pendel_roboter_mutter.xml") 
 
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
@@ -70,9 +72,6 @@ class PendelEnv(gym.Env):
         # --- 3. Spaces ---
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
-        # HINWEIS: Observation Space ist noch shape=(5,). 
-        # Wenn Sie self.last_action in _get_obs() hinzufügen, 
-        # muss dies auf shape=(6,) geändert werden.
         self.observation_space = spaces.Box(
             low=np.array([-1, -1, -np.inf, -1, -np.inf], dtype=np.float32),
             high=np.array([1, 1, np.inf, 1, np.inf], dtype=np.float32),
@@ -84,11 +83,11 @@ class PendelEnv(gym.Env):
         self.viewer = None
         
         # Controller States
-        self.target_position = 0.0      
-        self.current_velocity = 0.0     
-        self.last_ctrl_target = 0.0     
-        # NEU: Zustand für Action Smoothness Penalty
-        self.last_action = np.array([0.0]) 
+        self.target_position = 0.0
+        self.current_velocity = 0.0
+        self.last_ctrl_target = 0.0
+        # Zustand für Action Smoothness Penalty
+        self.last_action = np.array([0.0])
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -104,6 +103,7 @@ class PendelEnv(gym.Env):
         self.model.dof_damping[self.pendel_qvel_adr] = self.default_pendel_damping * damping_factor
 
         self.MAX_SPEED = self.np_random.uniform(0.9, 1.1) * MAX_SPEED
+        self.MIN_SPEED = self.np_random.uniform(0.9, 1.1) * MIN_SPEED 
         self.accel_ramp = self.np_random.uniform(0.9, 1.1) * ACCEL_RAMP
         self.latency = self.np_random.uniform(0.9, 1.1) * LATENCY
 
@@ -119,14 +119,32 @@ class PendelEnv(gym.Env):
         self.target_position = 0
         self.current_velocity = 0.0
         self.last_ctrl_target = 0.0
-        # NEU: last_action initialisieren
+        # last_action initialisieren
         self.last_action = np.array([0.0]) 
 
         return self._get_obs(), {}
 
     def step(self, action):
         """Führt einen Simulationsschritt mit der gegebenen Aktion durch."""
-        desired_velocity = float(action[0]) * self.MAX_SPEED
+        raw_action = float(action[0]) # Wert zwischen -1.0 und 1.0
+
+        # --- NEUE SKALIERUNGS-LOGIK für MIN/MAX Speed und Deadzone ---
+        deadzone = self.DEADZONE_MAGNITUDE 
+        
+        if abs(raw_action) < deadzone:
+            # Aktion ist zu klein -> Motor stoppt
+            desired_velocity = 0.0
+        else:
+            # 1. Betrag normalisieren: Skaliere den Eingabebereich [deadzone, 1.0] auf [0.0, 1.0]
+            magnitude_normalized = (np.clip(abs(raw_action), deadzone, 1.0) - deadzone) / (1.0 - deadzone)
+            
+            # 2. Skalieren auf den Geschwindigkeitsbereich [MIN_SPEED, MAX_SPEED]
+            speed_range = self.MAX_SPEED - self.MIN_SPEED
+            speed = self.MIN_SPEED + magnitude_normalized * speed_range
+            
+            # 3. Vorzeichen wiederherstellen
+            desired_velocity = np.sign(raw_action) * speed
+        # --- ENDE SKALIERUNGS-LOGIK ---
 
         # --- 1. Stepper-Logik ---
         velocity_diff = desired_velocity - self.current_velocity
@@ -168,7 +186,7 @@ class PendelEnv(gym.Env):
         if self.render_mode == "human":
             self.render()
             
-        # NEU: Speichere die aktuelle Aktion für den nächsten Smoothness Penalty
+        # Speichere die aktuelle Aktion für den nächsten Smoothness Penalty
         self.last_action = action.copy()
             
         return obs, reward, terminated, truncated, info
@@ -257,7 +275,7 @@ class PendelEnv(gym.Env):
         # --- 2. Das Hauptziel: Die Gauß-Glocke ---
         reward_phi = 1 * (np.exp(- (phi_err**2) / (2 * sigma_phi**2)))
         
-        # --- 3. Der "Sweet Spot" Bonus  ---
+        # --- 3. Der "Sweet Spot" Bonus ---
         dist_angle = np.abs(phi_err)
         dist_vel   = np.abs(phi_dot)
 
@@ -319,19 +337,12 @@ class PendelEnv(gym.Env):
         
         # --- 3. VERBESSERT: Der Stabilisierungs-Bonus ---
         # Statt harter If-Abfrage: Ein scharfer Peak, der Winkel UND Geschwindigkeit prüft.
-        # "Ich kriege extra Punkte, wenn ich oben bin UND still stehe."
-        # phi_dot ist schon skaliert (~ Bereich -1 bis 1), phi_err ist (-pi bis pi)
-        # Wir gewichten den Fehler quadratisch.
         target_accuracy = 0.1  # Wie "scharf" soll der Bonus sein?
-        # Dieser Term wird 1.0, wenn Fehler=0 und Speed=0. Sonst fällt er schnell ab.
         combined_error = (phi_err**2) + 0.5 * (phi_dot**2) 
         bonus = 2.0 * np.exp(-combined_error / (target_accuracy**2))
 
         # --- 4. Kosten ---
-        # Optional: Bestrafung für Geschwindigkeit erhöhen?
-        # q_phi_dot ist bei Ihnen 0.5. Das ist okay für den Schwung.
-        # Der "bonus" oben übernimmt jetzt den Anreiz zum Stillstand.
-
+        
         u_diff = u - self.last_action[0] 
         
         costs = (q_theta       * (theta_err**2) +
@@ -341,9 +352,6 @@ class PendelEnv(gym.Env):
                  q_smooth      * (u_diff**2))
 
         # --- 5. Gesamt ---
-        # WICHTIG: Prüfen Sie die Balance. 
-        # Max Reward = 1.0 (Basis) + 2.0 (Bonus) = 3.0
-        # Max Costs sollten dies nicht sofort auffressen.
         reward = reward_phi + bonus - costs
         
         return float(reward)
@@ -359,12 +367,3 @@ class PendelEnv(gym.Env):
         if self.viewer is not None:
             self.viewer.close()
 
-if __name__ == '__main__':
-    env = PendelEnv(render_mode="human")
-    obs, info = env.reset()
-    for _ in range(100):
-        action = env.action_space.sample()
-        obs, reward, terminated, truncated, info = env.step(action)
-        if terminated or truncated:
-            obs, info = env.reset()
-    env.close()

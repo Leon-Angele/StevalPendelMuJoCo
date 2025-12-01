@@ -23,7 +23,7 @@ from stable_baselines3.common.callbacks import EvalCallback
 
 # --- Hyperparameter (Optimiert für Stabilität) ---
 TOTAL_TIMESTEPS = 1_000_000  
-LEARNING_RATE = 7e-4
+LEARNING_RATE = 1e-3
 BUFFER_SIZE = 1_000_000  
 BATCH_SIZE = 256  
 TRAIN_FREQ = 1

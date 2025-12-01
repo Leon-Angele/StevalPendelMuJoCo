@@ -1,6 +1,6 @@
 <mujoco model="Pendel">
   <compiler angle="radian"/>
-<option gravity="0 0 -9.81" timestep="0.001"/>
+  <option gravity="0 0 -9.81" timestep="0.001"/> 
 
   <default>
     <geom conaffinity="0" contype="0"/>
@@ -16,8 +16,7 @@
     <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="base_link"/>
 
     <body name="Encoder_1" pos="0 0 0.316">
-      <inertial pos="4.28223e-08 -0.000135348 0.0190114" quat="0.707107 0 0 0.707107" mass="0.102359" diaginertia="2e-05 1.8e-05 1.8e-05"/>
-
+      <inertial pos="0.0 0.0 0.0190114" quat="0.707107 0 0 0.707107" mass="0.102359" diaginertia="2e-05 1.8e-05 1.8e-05"/>
       <geom name="rotary_joint_vis" type="cylinder" size="0.02 0.005" pos="0 0 0" rgba="1 1 0 1"/>
 
       <joint name="rotaryGelenk" pos="0 0 0" axis="0 0 1" range="-6.28318 6.28318" damping="0.005" frictionloss="0.00001"/>
@@ -25,21 +24,21 @@
       <geom pos="0 0 -0.316" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="Encoder_1"/>
 
       <body name="Pendel_1" pos="0 -0.0295 0.019002">
-        <inertial pos="0.000001 -0.057165 -0.120463" mass="0.017498" fullinertia="0.0001368 0.0001309 0.000006219 0 0 -0.000016371"/>
+        <inertial pos="0 -0.09640 -0.1640" mass="0.038014" fullinertia="0.0005330 0.0004654 0.000068563 -0.000000000246 -0.000000001259 -0.0001223"/>
         
-        <site name="schwerpunkt_marker" pos="0.000001 -0.057165 -0.120463" size="0.005" rgba="1 0 0 1" type="sphere"/>
-
+        <site name="schwerpunkt_marker" pos="0 -0.09640 -0.1640" size="0.005" rgba="1 0 0 1" type="sphere"/>
         <geom name="pendel_joint_vis" type="cylinder" size="0.02 0.005" pos="0 0 0" quat="0.70710678 0.70710678 0 0" rgba="1 1 0 1"/>
-
         <joint name="pendelGelenk" pos="0 0 0" axis="0 -1 0" damping="0.000067" frictionloss="0.0"/>
-
+        
         <geom pos="0 0.0295 -0.335002" type="mesh" rgba="0.7 0.7 0.7 1" mesh="Pendel_1"/>
       </body>
+
+
     </body>
   </worldbody>
 
-<actuator>
-    <position name="motor_rotary" joint="rotaryGelenk" kp="1000" ctrlrange="-6.28318 6.28318" forcerange="-0.25 0.25"/>
-</actuator>
+  <actuator>
+    <position name="motor_rotary" joint="rotaryGelenk" kp="1000" ctrlrange="-6.28318 6.28318" forcerange="-0.3 0.3"/>
+  </actuator>
 
 </mujoco>
