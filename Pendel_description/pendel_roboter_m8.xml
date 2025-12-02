@@ -1,0 +1,44 @@
+<mujoco model="Pendel">
+  <compiler angle="radian"/>
+  <option gravity="0 0 -9.81" timestep="0.001"/> 
+
+  <default>
+    <geom conaffinity="0" contype="0"/>
+  </default>
+
+  <asset>
+    <mesh name="base_link" content_type="model/stl" file="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="Pendel_1" content_type="model/stl" file="meshes/Pendel_1.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="Encoder_1" content_type="model/stl" file="meshes/Encoder_1.stl" scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <worldbody>
+    <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="base_link"/>
+
+    <body name="Encoder_1" pos="0 0 0.316">
+      <inertial pos="0.0 0.0 0.0190114" quat="0.707107 0 0 0.707107" mass="0.102359" diaginertia="2e-05 1.8e-05 1.8e-05"/>
+      <geom name="rotary_joint_vis" type="cylinder" size="0.02 0.005" pos="0 0 0" rgba="1 1 0 1"/>
+
+      <joint name="rotaryGelenk" pos="0 0 0" axis="0 0 1" range="-6.28318 6.28318" damping="0.005" frictionloss="0.00001"/>
+
+      <geom pos="0 0 -0.316" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="Encoder_1"/>
+
+      <body name="Pendel_1" pos="0 -0.0295 0.019002">
+        <inertial pos="0 -0.092085 -0.114326" mass="0.03126" fullinertia="4.106e-4 3.473e-4 6.380e-5 0 0 -9.972e-5"/>
+        
+        <site name="schwerpunkt_marker" pos="0 -0.08469 -0.076" size="0.005" rgba="1 0 0 1" type="sphere"/>
+        <geom name="pendel_joint_vis" type="cylinder" size="0.02 0.005" pos="0 0 0" quat="0.70710678 0.70710678 0 0" rgba="1 1 0 1"/>
+        <joint name="pendelGelenk" pos="0 0 0" axis="0 -1 0" damping="0.000067" frictionloss="0.0"/>
+        
+        <geom pos="0 0.0295 -0.335002" type="mesh" rgba="0.7 0.7 0.7 1" mesh="Pendel_1"/>
+      </body>
+
+
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="motor_rotary" joint="rotaryGelenk" kp="1000" ctrlrange="-6.28318 6.28318" forcerange="-0.3 0.3"/>
+  </actuator>
+
+</mujoco>

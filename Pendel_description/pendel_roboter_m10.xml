@@ -24,9 +24,9 @@
       <geom pos="0 0 -0.316" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="Encoder_1"/>
 
       <body name="Pendel_1" pos="0 -0.0295 0.019002">
-        <inertial pos="0 -0.09640 -0.1640" mass="0.038014" fullinertia="0.0005330 0.0004654 0.000068563 -0.000000000246 -0.000000001259 -0.0001223"/>
+        <inertial pos="0 -0.09640 -0.1394" mass="0.038014" fullinertia="0.0005330 0.0004654 0.000068563 -0.000000000246 -0.000000001259 -0.0001223"/>
         
-        <site name="schwerpunkt_marker" pos="0 -0.09640 -0.1640" size="0.005" rgba="1 0 0 1" type="sphere"/>
+        <site name="schwerpunkt_marker" pos="0 -0.09640 -0.1394" size="0.005" rgba="1 0 0 1" type="sphere"/>
         <geom name="pendel_joint_vis" type="cylinder" size="0.02 0.005" pos="0 0 0" quat="0.70710678 0.70710678 0 0" rgba="1 1 0 1"/>
         <joint name="pendelGelenk" pos="0 0 0" axis="0 -1 0" damping="0.000067" frictionloss="0.0"/>
         
