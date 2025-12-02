@@ -8,7 +8,7 @@ import argparse
 import os
 import matplotlib.pyplot as plt
 from stable_baselines3.common.monitor import Monitor
-from pendel_env_full import PendelEnv 
+from pendel_env_pos import PendelEnv 
 from stable_baselines3 import TD3
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3.common.vec_env import DummyVecEnv
